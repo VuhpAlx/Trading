@@ -1,6 +1,6 @@
 # data_layer.py
 import pandas as pd
-import requests
+import httpx
 import websockets
 import json
 import asyncio
@@ -12,74 +12,103 @@ logger = logging.getLogger("DataLayer")
 
 class DataLayer:
     def __init__(self):
-        self.cache = {}
-        self.on_tick_callback = None  # [S?A L?I] Kh?i t?o c?u n?i v?i main.py
+        self.cache: dict = {}
+        self.on_tick_callback = None
 
-    def bootstrap(self, symbol: str, interval: str):
-        if symbol not in self.cache: self.cache[symbol] = {}
-        logger.info(f"Bootstrapping {symbol} {interval}...")
+    async def bootstrap(self, symbol: str, interval: str):
+        if symbol not in self.cache:
+            self.cache[symbol] = {}
+        logger.info(f"Bootstrapping {symbol}/{interval}...")
         try:
-            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={HISTORY_LIMIT}"
-            res = requests.get(url, timeout=10).json()
-            df = pd.DataFrame(res,
-                              columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'ct', 'qav', 'nt', 'tb',
-                                       'tq', 'i'])
+            url = "https://api.binance.com/api/v3/klines"
+            params = {"symbol": symbol, "interval": interval, "limit": HISTORY_LIMIT}
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(url, params=params)
+                data = res.json()
+            df = pd.DataFrame(data, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'ct', 'qav', 'nt', 'tb', 'tq', 'i'
+            ])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
-            for col in ['open', 'high', 'low', 'close', 'volume']: df[col] = df[col].astype(float)
-            self.cache[symbol][interval] = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = df[col].astype(float)
+            self.cache[symbol][interval] = (
+                df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                .reset_index(drop=True)
+                .copy()
+            )
         except Exception as e:
-            logger.error(f"L?i REST API {symbol}: {e}")
+            logger.error(f"Bootstrap error {symbol}/{interval}: {e}")
+
+    async def bootstrap_all(self):
+        """Bootstrap all symbol/timeframe combinations concurrently."""
+        tasks = [
+            self.bootstrap(sym, tf)
+            for sym in SYMBOLS
+            for tf in TIMEFRAMES
+        ]
+        await asyncio.gather(*tasks)
+        logger.info(f"Bootstrap complete: {len(SYMBOLS)} symbols × {len(TIMEFRAMES)} timeframes")
 
     async def ws_loop(self):
         streams = [f"{s.lower()}@kline_{t}" for s in SYMBOLS for t in TIMEFRAMES]
         ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
         while True:
             try:
-                async with websockets.connect(ws_url) as ws:
+                async with websockets.connect(
+                    ws_url,
+                    ping_interval=20,
+                    ping_timeout=20,
+                    close_timeout=10,
+                    max_size=10_000_000,
+                ) as ws:
                     logger.info("Binance WS Connected!")
                     while True:
                         msg = json.loads(await ws.recv())['data']
-                        await self._update_cache(msg)  # [S?A L?I] Ph?i c? await ? ??y
+                        await self._update_cache(msg)
             except Exception as e:
-                logger.error(f"WS Disconnected: {e}. Reconnecting...")
+                logger.error(f"WS Disconnected: {e}. Reconnecting in 5s...")
                 await asyncio.sleep(5)
 
-    async def _update_cache(self, msg):  # [S?A L?I] Th?m async def
-        k, sym, interval = msg['k'], msg['s'], msg['k']['i']
-        if sym not in self.cache or interval not in self.cache[sym]: return
+    async def _update_cache(self, msg: dict):
+        k = msg['k']
+        sym = msg['s']
+        interval = k['i']
+
+        if sym not in self.cache or interval not in self.cache[sym]:
+            return
 
         df = self.cache[sym][interval]
         tick_time = pd.to_datetime(k['t'], unit='ms', utc=True)
         last_idx = df.index[-1]
 
         if df.at[last_idx, 'timestamp'] == tick_time:
+            # In-place update — existing candle
             df.at[last_idx, 'high'] = float(k['h'])
             df.at[last_idx, 'low'] = float(k['l'])
             df.at[last_idx, 'close'] = float(k['c'])
             df.at[last_idx, 'volume'] = float(k['v'])
         else:
-            new_row = {'timestamp': tick_time, 'open': float(k['o']), 'high': float(k['h']), 'low': float(k['l']),
-                       'close': float(k['c']), 'volume': float(k['v'])}
-            self.cache[sym][interval] = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True).tail(MAX_CACHE_SIZE)
+            # New candle: drop oldest row, append new (keeps fixed size)
+            new_row = pd.DataFrame([{
+                'timestamp': tick_time,
+                'open': float(k['o']), 'high': float(k['h']),
+                'low': float(k['l']),  'close': float(k['c']),
+                'volume': float(k['v'])
+            }])
+            self.cache[sym][interval] = (
+                pd.concat([df.iloc[1:], new_row], ignore_index=True)
+            )
 
-        # [S?A L?I QUAN TR?NG NH?T]: B?o cho main.py bi?t ?? ??y data xu?ng Frontend
-        # TRONG FILE data_layer.py (M?I)
         if self.on_tick_callback:
-            kline = msg['k']
-
-            # ??ng g?i tick_data
             tick_data = {
-                "time": int(kline['t'] / 1000),  # ??i ms sang gi?y (Unix Timestamp)
-                "open": float(kline['o']),
-                "high": float(kline['h']),
-                "low": float(kline['l']),
-                "close": float(kline['c'])
+                "time": int(k['t'] / 1000),
+                "open": float(k['o']),
+                "high": float(k['h']),
+                "low": float(k['l']),
+                "close": float(k['c']),
             }
-
-            is_closed = kline['x']  # Tr?ng th?i n?n ??ng (True/False)
-
-            # G?i callback v?i ??y ?? 4 tham s?
-            await self.on_tick_callback(sym, interval, is_closed, tick_data)
+            await self.on_tick_callback(sym, interval, bool(k['x']), tick_data)
 
 
 data_manager = DataLayer()

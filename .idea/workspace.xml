@@ -4,29 +4,29 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="e877d84f-c436-484a-a9fc-0bbe2f94a655" name="Changes" comment="Trade_bot phase-v2">
-      <change afterPath="$PROJECT_DIR$/ai_advisor.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/simulator_manager.py" afterDir="false" />
+    <list default="true" id="e877d84f-c436-484a-a9fc-0bbe2f94a655" name="Changes" comment="Trade_bot phase-v4(advise)">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data_layer.py" beforeDir="false" afterPath="$PROJECT_DIR$/data_layer.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BNBUSDT_15m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BNBUSDT_15m.jsonl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml_training_data_BNBUSDT_1h.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BNBUSDT_1h.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BNBUSDT_1m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BNBUSDT_1m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BNBUSDT_30m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BNBUSDT_30m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BNBUSDT_5m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BNBUSDT_5m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BTCUSDT_15m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BTCUSDT_15m.jsonl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml_training_data_BTCUSDT_1h.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BTCUSDT_1h.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BTCUSDT_1m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BTCUSDT_1m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BTCUSDT_30m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BTCUSDT_30m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_BTCUSDT_5m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_BTCUSDT_5m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_ETHUSDT_15m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_ETHUSDT_15m.jsonl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml_training_data_ETHUSDT_1h.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_ETHUSDT_1h.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_ETHUSDT_1m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_ETHUSDT_1m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_ETHUSDT_30m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_ETHUSDT_30m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_ETHUSDT_5m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_ETHUSDT_5m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_15m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_15m.jsonl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_1h.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_1h.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_1m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_1m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_30m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_30m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_5m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/ml_training_data_PAXGUSDT_5m.jsonl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/signal_engine.py" beforeDir="false" afterPath="$PROJECT_DIR$/signal_engine.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/static/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/static/index.html" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trade_history_BNBUSDT_1m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/trade_history_BNBUSDT_1m.jsonl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/trade_history_BTCUSDT_1m.jsonl" beforeDir="false" afterPath="$PROJECT_DIR$/trade_history_BTCUSDT_1m.jsonl" afterDir="false" />
@@ -157,7 +157,23 @@
       <option name="project" value="LOCAL" />
       <updated>1776932582608</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Trade_bot phase-v4(advise)">
+      <option name="closed" value="true" />
+      <created>1776959992445</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1776959992445</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Trade_bot phase-v4(advise)">
+      <option name="closed" value="true" />
+      <created>1776960001660</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1776960001660</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -182,7 +198,8 @@
     <MESSAGE value="All success_1" />
     <MESSAGE value="Trade_bot phase" />
     <MESSAGE value="Trade_bot phase-v2" />
-    <option name="LAST_COMMIT_MESSAGE" value="Trade_bot phase-v2" />
+    <MESSAGE value="Trade_bot phase-v4(advise)" />
+    <option name="LAST_COMMIT_MESSAGE" value="Trade_bot phase-v4(advise)" />
   </component>
   <component name="XDebuggerManager">
     <watches-manager>

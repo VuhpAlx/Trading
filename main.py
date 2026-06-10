@@ -2,105 +2,52 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
+from typing import Optional
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import uvicorn
 
 from ai_advisor import analyze_user_trade
-# Import c?c module b?n ?? t?o
 from data_layer import data_manager
 from indicator_layer import IndicatorLayer
 from signal_engine import AdvancedSignalEngine
 from config import SYMBOLS, TIMEFRAMES
 
-# Thi?t l?p log
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MainApp")
 
-# Kh?i t?o c?c c?ng c? x? l?
+# Shared indicator layer (cached per symbol/interval)
 indicator_layer = IndicatorLayer()
 
-# T?o t? ?i?n qu?n l? Engine cho t?ng c?p ti?n v? timeframe
-# C?u tr?c: engines["BTCUSDT_1m"] = AdvancedSignalEngine()
+# One engine per symbol/timeframe combination
 engines = {
-    f"{sym}_{tf}": AdvancedSignalEngine(sym, tf) # Truy?n th?m sym v? tf v?o ??y
+    f"{sym}_{tf}": AdvancedSignalEngine(sym, tf)
     for sym in SYMBOLS
     for tf in TIMEFRAMES
 }
 
 
-async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data: dict):
-    engine = engines.get(f"{symbol}_{interval}")
-    current_price = tick_data['close']
-
-    # 1. C?p nh?t trade th? c?ng (TP/SL)
-    closed_manual_trade = engine.manual_sim.update_tick(current_price)
-    if closed_manual_trade:
-        # G?i th?ng b?o WebSocket khi l?nh th? c?ng kh?p TP/SL
-        await connection_manager.broadcast_to_symbol(json.dumps({
-            "type": "MANUAL_TRADE_CLOSED",
-            "data": closed_manual_trade
-        }), symbol, interval)
-
-    # 1. L?y d? li?u t? RAM Cache
-    df_raw = data_manager.cache.get(symbol, {}).get(interval)
-    if df_raw is None or df_raw.empty: return
-
-    # 2. T?nh Indicator
-    df_ind = indicator_layer.apply_indicators(df_raw)
-
-    mtf_context = {}
-    for tf in ("1m", "5m", "15m"):
-        df_tf = data_manager.cache.get(symbol, {}).get(tf)
-        if df_tf is not None and not df_tf.empty:
-            mtf_context[tf] = indicator_layer.apply_indicators(df_tf)
-
-    engine_key = f"{symbol}_{interval}"
-    engine = engines.get(engine_key)
-    if not engine: return
-
-    # ====================================================================
-    # ? FIX QUAN TR?NG: G?I H?M N?Y TR?N T?NG TICK (M?I GI?Y)
-    # L?i engine ?? t? c? t??ng l?a, n? s? t? update PnL v? ch?t n?n chu?n
-    # ====================================================================
-    analysis = engine.generate_signal(df_ind, mtf_context)
-    #analysis["manual_trade"] = engine.manual_sim.active_trades[0] if engine.manual_sim.active_trades else None
-    #analysis["manual_history"] = engine.manual_sim.history
-    analysis["manual_active"] = engine.manual_sim.active_trades
-    analysis["manual_history"] = engine.manual_sim.history
-    message = json.dumps({
-        "type": "TICK",
-        "symbol": symbol,
-        "candle": tick_data,
-        "signal": analysis
-    })
-
-    await connection_manager.broadcast_to_symbol(message, symbol, interval)
-
-
-# G?n callback v?o data_manager
-data_manager.on_tick_callback = on_market_tick
-
-
-# --- QU?N L? K?T N?I WEBSOCKET FRONTEND ---
+# ==========================================
+# WEBSOCKET CONNECTION MANAGER
+# ==========================================
 class ConnectionManager:
     def __init__(self):
-        # L?u tr?: {websocket: {"symbol": "...", "interval": "..."}}
-        self.active_connections = {}
+        self.active_connections: dict = {}
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections[websocket] = {"symbol": "BTCUSDT", "interval": "1m"}
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active_connections[ws] = {"symbol": "BTCUSDT", "interval": "1m"}
 
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            del self.active_connections[websocket]
+    def disconnect(self, ws: WebSocket):
+        self.active_connections.pop(ws, None)
 
-    def update_subscription(self, websocket: WebSocket, symbol: str, interval: str):
-        if websocket in self.active_connections:
-            self.active_connections[websocket]["symbol"] = symbol
-            self.active_connections[websocket]["interval"] = interval
+    def update_subscription(self, ws: WebSocket, symbol: str, interval: str):
+        if ws in self.active_connections:
+            self.active_connections[ws]["symbol"] = symbol
+            self.active_connections[ws]["interval"] = interval
 
     async def broadcast_to_symbol(self, message: str, symbol: str, interval: str):
         for ws, pref in list(self.active_connections.items()):
@@ -114,123 +61,177 @@ class ConnectionManager:
 connection_manager = ConnectionManager()
 
 
-# --- V?NG ??I ?NG D?NG (LIFESPAN) ---
+# ==========================================
+# MARKET TICK HANDLER
+# ==========================================
+async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data: dict):
+    engine = engines.get(f"{symbol}_{interval}")
+    if engine is None:
+        return
+
+    current_price = tick_data['close']
+
+    # Check manual TP/SL
+    closed_manual_trades = engine.manual_sim.update_tick(current_price)
+    for ct in closed_manual_trades:
+        await connection_manager.broadcast_to_symbol(
+            json.dumps({"type": "MANUAL_TRADE_CLOSED", "data": ct}),
+            symbol, interval,
+        )
+
+    # Get cached raw data
+    df_raw = data_manager.cache.get(symbol, {}).get(interval)
+    if df_raw is None or df_raw.empty:
+        return
+
+    # Compute indicators for current interval (always fresh — close price changes)
+    df_ind = indicator_layer.apply_indicators(df_raw)
+
+    # MTF context — FIXED: use 5m, 15m, 1h (matches signal_engine expectation)
+    mtf_context = {}
+    for tf in ("5m", "15m", "1h"):
+        df_tf = data_manager.cache.get(symbol, {}).get(tf)
+        if df_tf is not None and not df_tf.empty:
+            # Use cached version — only recomputes when candle closes
+            mtf_context[tf] = indicator_layer.apply_indicators_cached(df_tf, symbol, tf)
+
+    # Generate signal
+    analysis = engine.generate_signal(df_ind, mtf_context)
+    analysis["manual_active"]  = engine.manual_sim.active_trades
+    analysis["manual_history"] = engine.manual_sim.history
+
+    message = json.dumps({
+        "type":   "TICK",
+        "symbol": symbol,
+        "candle": tick_data,
+        "signal": analysis,
+    })
+    await connection_manager.broadcast_to_symbol(message, symbol, interval)
+
+
+data_manager.on_tick_callback = on_market_tick
+
+
+# ==========================================
+# FASTAPI LIFESPAN
+# ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("[SYSTEM] Kh?i ??ng h? th?ng Quant Trading...")
-    # 1. T?i d? li?u l?ch s? cho t?t c? c?c m? trong config
-    for sym in SYMBOLS:
-        for tf in TIMEFRAMES:
-            data_manager.bootstrap(sym, tf)
-
-    # 2. B?t ??u lu?ng WebSocket Binance ch?y ng?m
+    logger.info("[SYSTEM] Starting Quant Trading Terminal...")
+    # Bootstrap all symbols/timeframes concurrently (async, non-blocking)
+    await data_manager.bootstrap_all()
+    # Start Binance WS stream in background
     asyncio.create_task(data_manager.ws_loop())
     yield
-    logger.info("[SYSTEM] ?ang t?t h? th?ng.")
+    logger.info("[SYSTEM] Shutting down.")
 
 
-# --- KH?I T?O FASTAPI ---
 app = FastAPI(lifespan=lifespan)
-
-# Mount th? m?c static ?? ph?c v? file HTML/JS
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/")
 async def root():
-    """Tr? v? giao di?n ch?nh"""
-    return FileResponse('static/index.html')
+    return FileResponse("static/index.html")
 
 
+# ==========================================
+# WEBSOCKET ENDPOINT
+# ==========================================
 @app.websocket("/ws/frontend")
-async def websocket_endpoint(websocket: WebSocket):
-    """
-    C?ng k?t n?i d?nh cho Tr?nh duy?t.
-    Cho ph?p ??i c?p ti?n v? nh?n d? li?u real-time.
-    """
-    await connection_manager.connect(websocket)
+async def websocket_endpoint(ws: WebSocket):
+    await connection_manager.connect(ws)
     try:
         while True:
-            # L?ng nghe y?u c?u ??i Symbol t? Frontend
-            data = await websocket.receive_text()
-            req = json.loads(data)
+            data = await ws.receive_text()
+            req  = json.loads(data)
 
             if req.get("action") == "subscribe":
-                symbol = req['symbol']
+                symbol   = req['symbol']
                 interval = req['interval']
-                capital = req.get("capital")
+                capital  = req.get("capital")
 
-                # C?p nh?t l?a ch?n c?a Client
-                connection_manager.update_subscription(websocket, symbol, interval)
+                connection_manager.update_subscription(ws, symbol, interval)
 
-                engine_key = f"{symbol}_{interval}"
-                engine = engines.get(engine_key)
+                engine = engines.get(f"{symbol}_{interval}")
                 if engine and capital is not None:
                     try:
                         engine.set_capital(float(capital))
-                    except Exception:
-                        logger.warning(f"Capital value invalid: {capital}")
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid capital: {capital}")
 
-                # Ki?m tra v? n?p cache n?u c?n
+                # Bootstrap on-demand if symbol not in cache
                 if symbol not in data_manager.cache:
-                    data_manager.bootstrap(symbol, interval)
+                    await data_manager.bootstrap(symbol, interval)
 
-                # G?i 200 n?n l?ch s? ?? Frontend v? l?i Chart
+                # Send 200-candle history for chart initialisation
                 df_raw = data_manager.cache.get(symbol, {}).get(interval)
                 if df_raw is not None and not df_raw.empty:
-                    df_ind = indicator_layer.apply_indicators(df_raw).tail(200)
+                    df_ind = indicator_layer.apply_indicators(df_raw)
+                    tail   = df_ind.tail(200)
 
-                    # Chu?n b? n?n l?ch s?
-                    history_data = []
-                    for _, row in df_ind.iterrows():
-                        history_data.append({
-                            "time": int(row['timestamp'].timestamp()),
-                            "open": row['open'], "high": row['high'],
-                            "low": row['low'], "close": row['close'],
-                            "EMA_9": row.get('EMA_9', 0),
-                            "EMA_21": row.get('EMA_21', 0)
-                        })
+                    history_data = [
+                        {
+                            "time":   int(row['timestamp'].timestamp()),
+                            "open":   row['open'],  "high": row['high'],
+                            "low":    row['low'],   "close": row['close'],
+                            "EMA_9":  row.get('EMA_9',  0) or 0,
+                            "EMA_21": row.get('EMA_21', 0) or 0,
+                        }
+                        for _, row in tail.iterrows()
+                    ]
+                    history_data.sort(key=lambda x: x['time'])
 
-                    # S?p x?p v? x?a tr?ng l?p tr??c khi g?i
-                    history_data = sorted(history_data, key=lambda x: x['time'])
-
-                    await websocket.send_text(json.dumps({
-                        "type": "FULL_LOAD",
-                        "symbol": symbol,
-                        "data": history_data
+                    await ws.send_text(json.dumps({
+                        "type": "FULL_LOAD", "symbol": symbol, "data": history_data,
                     }))
 
     except WebSocketDisconnect:
-        connection_manager.disconnect(websocket)
+        connection_manager.disconnect(ws)
     except Exception as e:
-        logger.error(f"L?i WebSocket Client: {e}")
-        connection_manager.disconnect(websocket)
+        logger.error(f"WebSocket error: {e}")
+        connection_manager.disconnect(ws)
 
 
-# Trong main.py
+# ==========================================
+# REST ENDPOINTS
+# ==========================================
+class TradeRequest(BaseModel):
+    entry:    float
+    tp:       float
+    sl:       float
+    position: str
+
+
+class ManualTradeData(BaseModel):
+    entry:    float
+    tp:       float
+    sl:       float
+    position: str
+
+
 @app.post("/trade/analyze")
-async def get_trade_analysis(symbol: str, interval: str, trade_input: dict):
+async def get_trade_analysis(symbol: str, interval: str, body: TradeRequest):
     engine = engines.get(f"{symbol}_{interval}")
-    # L?y indicator hi?n t?i t? cache
-    current_inds = engine.ui_state['indicators']
+    if engine is None:
+        return {"error": "Engine not found", "rr": 0, "suggestions": [], "is_valid": False}
 
-    # G?i AI Advisor
+    current_inds = engine.ui_state.get('indicators', {})
     result = analyze_user_trade(
-        entry=trade_input['entry'],
-        tp=trade_input['tp'],
-        sl=trade_input['sl'],
-        position=trade_input['position'],
-        current_indicators=current_inds
+        entry=body.entry, tp=body.tp, sl=body.sl,
+        position=body.position, current_indicators=current_inds,
     )
     return result
 
 
 @app.post("/trade/open-manual")
-async def open_manual_trade(symbol: str, interval: str, trade_data: dict):
+async def open_manual_trade(symbol: str, interval: str, body: ManualTradeData):
     engine = engines.get(f"{symbol}_{interval}")
-    engine.manual_sim.open_trade(trade_data)
+    if engine is None:
+        return {"status": "error", "message": "Engine not found"}
+    engine.manual_sim.open_trade(body.model_dump())
     return {"status": "success"}
 
+
 if __name__ == "__main__":
-    # Ch?y server t?i port 8000
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
