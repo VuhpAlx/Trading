@@ -170,17 +170,23 @@ async def websocket_endpoint(ws: WebSocket):
                     df_ind = indicator_layer.apply_indicators(df_raw)
                     tail   = df_ind.tail(200)
 
+                    # Vectorized build — ~5× faster than iterrows()
+                    # Timestamps are already in ascending order from Binance
+                    times  = (tail['timestamp'].astype('int64') // 10 ** 9).tolist()
+                    opens  = tail['open'].tolist()
+                    highs  = tail['high'].tolist()
+                    lows   = tail['low'].tolist()
+                    closes = tail['close'].tolist()
+                    e9s    = tail['EMA_9'].fillna(0).tolist()
+                    e21s   = tail['EMA_21'].fillna(0).tolist()
+
                     history_data = [
                         {
-                            "time":   int(row['timestamp'].timestamp()),
-                            "open":   row['open'],  "high": row['high'],
-                            "low":    row['low'],   "close": row['close'],
-                            "EMA_9":  row.get('EMA_9',  0) or 0,
-                            "EMA_21": row.get('EMA_21', 0) or 0,
+                            "time": t, "open": o, "high": h, "low": l, "close": c,
+                            "EMA_9": e9 or 0, "EMA_21": e21 or 0,
                         }
-                        for _, row in tail.iterrows()
+                        for t, o, h, l, c, e9, e21 in zip(times, opens, highs, lows, closes, e9s, e21s)
                     ]
-                    history_data.sort(key=lambda x: x['time'])
 
                     await ws.send_text(json.dumps({
                         "type": "FULL_LOAD", "symbol": symbol, "data": history_data,

@@ -89,16 +89,22 @@ class DataLayer:
             df.at[last_idx, 'close'] = float(k['c'])
             df.at[last_idx, 'volume'] = float(k['v'])
         else:
-            # New candle: drop oldest row, append new (keeps fixed size)
-            new_row = pd.DataFrame([{
-                'timestamp': tick_time,
-                'open': float(k['o']), 'high': float(k['h']),
-                'low': float(k['l']),  'close': float(k['c']),
-                'volume': float(k['v'])
-            }])
-            self.cache[sym][interval] = (
-                pd.concat([df.iloc[1:], new_row], ignore_index=True)
-            )
+            # New candle: in-place rotation — no DataFrame allocation
+            # Float columns: shift numpy backing array left by 1 (O(n) copy, no new object)
+            for col, raw_val in (
+                ('open',   k['o']),
+                ('high',   k['h']),
+                ('low',    k['l']),
+                ('close',  k['c']),
+                ('volume', k['v']),
+            ):
+                buf = df[col].values   # numpy float64 view of backing array
+                buf[:-1] = buf[1:]     # numpy handles overlapping copy safely
+                buf[-1]  = float(raw_val)
+
+            # Timestamp column (DatetimeTZ): shift via pandas, set last cell
+            df['timestamp'] = df['timestamp'].shift(periods=-1)
+            df.at[df.index[-1], 'timestamp'] = tick_time
 
         if self.on_tick_callback:
             tick_data = {

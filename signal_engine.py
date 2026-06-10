@@ -1,3 +1,4 @@
+import asyncio
 import pandas as pd
 import json
 import logging
@@ -6,6 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from simulator_manager import ManualTradeSimulator
+from prediction_engine import PredictionEngine
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("SignalEngine")
@@ -60,36 +62,43 @@ class AdaptiveScorer:
                 except json.JSONDecodeError:
                     continue
 
-                res = data.get("result")
-                direction = data.get("prediction", {}).get("direction", "")
-                raw_sigs = data.get("raw_signals", {})
-                if not raw_sigs or not res:
-                    continue
-
-                self._apply_result_to_stats(res)
-                factor = self._result_factor(res)
-                self._adjust_weights(raw_sigs, direction, factor, lr=0.01)
-
-                # Build recent_results display entry
-                pred = data.get("prediction", {})
-                rng  = pred.get("range", {})
                 try:
-                    rng_str = f"{float(rng.get('min', 0)):.2f} - {float(rng.get('max', 0)):.2f}"
-                except Exception:
-                    rng_str = "N/A"
+                    res       = data.get("result")
+                    pred      = data.get("prediction") or {}
+                    direction = pred.get("direction") or ""
+                    raw_sigs  = data.get("raw_signals") or {}
+                    if not raw_sigs or not res:
+                        continue
 
-                t_str = data.get("time", "")
-                if "T" in t_str:
+                    self._apply_result_to_stats(res)
+                    factor = self._result_factor(res)
+                    self._adjust_weights(raw_sigs, direction, factor, lr=0.01)
+
+                    # Build recent_results display entry
+                    rng = pred.get("range") or {}
                     try:
-                        t_str = datetime.fromisoformat(t_str).strftime('%H:%M:%S')
-                    except Exception:
-                        pass
+                        rng_str = (
+                            f"{float(rng.get('min', 0)):.2f} - "
+                            f"{float(rng.get('max', 0)):.2f}"
+                        )
+                    except (TypeError, ValueError):
+                        rng_str = "N/A"
 
-                self.recent_results.insert(0, {
-                    "time": t_str, "direction": direction, "range": rng_str,
-                    "actual_price": data.get("actual_price", 0),
-                    "final_result": res,
-                })
+                    t_str = data.get("time") or ""
+                    if "T" in t_str:
+                        try:
+                            t_str = datetime.fromisoformat(t_str).strftime('%H:%M:%S')
+                        except Exception:
+                            pass
+
+                    self.recent_results.insert(0, {
+                        "time": t_str, "direction": direction, "range": rng_str,
+                        "actual_price": data.get("actual_price") or 0,
+                        "final_result": res,
+                    })
+                except Exception as e:
+                    logger.debug(f"Skip malformed history entry: {e}")
+                    continue
 
             self.recent_results = self.recent_results[:15]
             self._recalc_ema_winrate()
@@ -197,16 +206,30 @@ class AdaptiveScorer:
                 "actual_price": round(current_close, 4),
                 "result": result,
             }
-            try:
-                with open(self.ml_log_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-            except Exception:
-                pass
+            self._async_write(self.ml_log_file, log_entry)
 
             resolved.append(target_time)
 
         for k in resolved:
             del self.pending_predictions[k]
+
+    # ---------- async file write ----------
+
+    @staticmethod
+    def _write_line_sync(path: str, line: str):
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+    def _async_write(self, path: str, data: dict):
+        line = json.dumps(data)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self._write_line_sync, path, line)
+        except RuntimeError:
+            self._write_line_sync(path, line)
 
     def learn_from_real_trade(self, snapshot: dict, direction: str, result: str):
         factor = 1.2 if result == "WIN" else -1.0
@@ -259,6 +282,22 @@ class TradeSimulator:
                 self.capital = self.history[0].get("capital_after", self.capital)
         except Exception:
             pass
+
+    @staticmethod
+    def _write_line_sync(path: str, line: str):
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+    def _async_write(self, path: str, data: dict):
+        line = json.dumps(data)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self._write_line_sync, path, line)
+        except RuntimeError:
+            self._write_line_sync(path, line)
 
     def set_capital(self, value: float):
         self.capital = max(1.0, float(value))
@@ -337,11 +376,7 @@ class TradeSimulator:
             "risk_pct": self.risk_pct, "position_size": round(t["size"], 6),
             "profit_usd": round(final_profit, 2), "pnl": round(final_pnl, 2), "result": res,
         }
-        try:
-            with open(self.trade_log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry) + "\n")
-        except Exception:
-            pass
+        self._async_write(self.trade_log_file, log_entry)
 
         self.history.insert(0, log_entry)
         self.history = self.history[:20]
@@ -370,9 +405,10 @@ class AdvancedSignalEngine:
     def __init__(self, symbol: str, interval: str):
         self.symbol   = symbol
         self.interval = interval
-        self.scorer   = AdaptiveScorer(symbol, interval)
-        self.trade_sim = TradeSimulator(symbol, interval, capital=100.0)
+        self.scorer     = AdaptiveScorer(symbol, interval)
+        self.trade_sim  = TradeSimulator(symbol, interval, capital=100.0)
         self.manual_sim = ManualTradeSimulator()
+        self.predictor  = PredictionEngine(atr_multiplier=1.2, smooth_period=5, max_width_pct=0.02)
 
         self.smoothed_score: float = 0.0
         self.confirm_counter: int  = 0
@@ -611,7 +647,7 @@ class AdvancedSignalEngine:
                     if action != "HOLD":
                         self.trade_sim.open_position(c_time_str, action, c_price, atr, raw_sigs)
 
-            # ============ PREDICTION ============
+            # ============ PREDICTION (EMA-smoothed PredictionEngine) ============
             if regime == "TREND":
                 p_dir = "BULLISH" if di_plus > di_minus else "BEARISH"
             else:
@@ -620,14 +656,22 @@ class AdvancedSignalEngine:
             if self.scorer.reverse_mode:
                 p_dir = "BEARISH" if p_dir == "BULLISH" else "BULLISH"
 
-            mid_price = c_price + (slope * 5)
-            conf = max(0.1, min(0.95, 1.0 - (atr / (c_price + 1e-9)) * 10))
+            # Map to PredictionEngine direction format (BULL/BEAR/SIDEWAY)
+            pe_dir = "BULL" if p_dir == "BULLISH" else "BEAR"
+            pred_result = self.predictor.predict(
+                close_price=c_price,
+                ema9=ema9,
+                atr=atr,
+                bb_upper=bb_u,
+                bb_lower=bb_l,
+                momentum_score=self.smoothed_score,
+                direction=pe_dir,
+            )
+            conf = pred_result["confidence"]
             pred = {
-                "direction": p_dir, "mid_price": round(mid_price, 4),
-                "range": {
-                    "min": round(mid_price - atr * 1.5, 4),
-                    "max": round(mid_price + atr * 1.5, 4),
-                },
+                "direction": p_dir,
+                "mid_price": pred_result["mid_price"],
+                "range": pred_result["range"],
             }
 
             indicators_snap = {

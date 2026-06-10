@@ -375,17 +375,17 @@ if bb_width > 0.001 and cooldown == 0:
         trade_sim.open_position(...)
 ```
 
-3h. **Prediction generation:**
+3h. **Prediction generation (EMA-smoothed via PredictionEngine):**
 ```python
-if regime == "TREND":
-    p_dir = "BULLISH" if di_plus > di_minus else "BEARISH"
-else:
-    p_dir = "BULLISH" if slope > 0 else "BEARISH"
-
-mid_price = c_price + (slope * 5)
-range = mid_price ± (atr * 1.5)
-confidence = 1 - (atr / price) * 10   # clamp [0.1, 0.95]
-
+pe_dir = "BULL" if p_dir == "BULLISH" else "BEAR"
+pred_result = self.predictor.predict(
+    close_price, ema9, atr, bb_upper, bb_lower,
+    momentum_score=smoothed_score, direction=pe_dir
+)
+# PredictionEngine dùng EMA smoothing cho mid_price và range_width
+# BB-adjusted width: max(atr*1.2, bb_width*0.35)
+# Momentum factor: 1 + (|score| * 0.25) — range rộng hơn khi signal mạnh
+# Max width cap: 2% của price (tránh range không thực tế)
 # Register để evaluate sau (tf_seconds * 5 giây)
 scorer.register_prediction(c_time + tf_secs * 5, {...})
 ```
@@ -830,7 +830,7 @@ on_market_tick(symbol, interval, is_closed, tick_data)
 
 ### ml_training_data_{SYMBOL}_{TF}.jsonl
 
-Ghi mỗi khi prediction được evaluate (synchronous `open(...,"a")`):
+Ghi mỗi khi prediction được evaluate (async via `run_in_executor`, non-blocking):
 ```json
 {
     "time": "2026-06-10T12:34:56",
@@ -846,7 +846,7 @@ Ghi mỗi khi prediction được evaluate (synchronous `open(...,"a")`):
 
 ### trade_history_{SYMBOL}_{TF}.jsonl
 
-Ghi mỗi khi auto trade đóng:
+Ghi mỗi khi auto trade đóng (async via `run_in_executor`, non-blocking):
 ```json
 {
     "symbol": "BTCUSDT", "timeframe": "1m",
@@ -881,7 +881,7 @@ Ghi mỗi khi auto trade đóng:
 | Bug | File:Line | Mô tả | Fix |
 |-----|-----------|-------|-----|
 | BUG-005 | signal_engine.py:366 | evaluate dùng prev close thay vì curr close | `float(curr['close'])` — **ĐÃ FIX** |
-| BUG-006 | signal_engine.py:57-58 | Key access không safe khi load history | `.get()` chaining |
+| BUG-006 | signal_engine.py:57-58 | Key access không safe khi load history — old JSONL schema khác crash | `.get()` + `or {}` + try/except bao quanh toàn bộ per-line block — **ĐÃ FIX** |
 | BUG-007 | simulator_manager.py | Cũ chỉ trả 1 trade, bỏ sót nếu 2 trade đóng cùng tick | Return list — **ĐÃ FIX** |
 
 ### Performance
@@ -889,46 +889,59 @@ Ghi mỗi khi auto trade đóng:
 |-----|-------|-----------|
 | BUG-008 | Bootstrap sync với requests.get | **ĐÃ FIX** (httpx async) |
 | BUG-009 | Full 5000-row indicator recompute mỗi tick | **ĐÃ CẢI THIỆN** (INDICATOR_WINDOW=260 + cached MTF) |
-| BUG-010 | pd.concat allocate DataFrame mỗi nến mới | Vẫn còn, có thể dùng deque |
-| BUG-011 | Sync file I/O trong async loop | Vẫn còn |
-| BUG-012 | iterrows() cho 200-candle history | Vẫn còn |
+| BUG-010 | pd.concat allocate DataFrame mỗi nến mới | **ĐÃ FIX** — numpy in-place shift per column (`buf[:-1]=buf[1:]`), timestamp dùng `pandas.shift(-1)`. Không tạo DataFrame mới. |
+| BUG-011 | Sync `open(file,"a")` block event loop trong async tick | **ĐÃ FIX** — `asyncio.get_running_loop().run_in_executor(None, write_func)` trong cả `AdaptiveScorer._async_write` và `TradeSimulator._async_write` |
+| BUG-012 | iterrows() cho 200-candle history | **ĐÃ FIX** — vectorized: `.tolist()` per column + `zip()`, bỏ `sort()` dư thừa |
 
 ### Frontend
 | Bug | Mô tả | Trạng thái |
 |-----|-------|-----------|
 | BUG-013 | innerHTML rebuild toàn bộ table mỗi tick | **ĐÃ CẢI THIỆN** (setHTML với diff check) |
 | BUG-014 | Không có RAF batching | **ĐÃ FIX** (scheduleRender + RAF) |
+| BUG-015 | HTML attribute whitespace trên PAXGUSDT option | **ĐÃ FIX** (code hiện tại đã clean) |
 
 ---
 
-## 14. UNUSED / DEAD CODE
+## 14. DEAD CODE — ĐÃ DỌN DẸP
 
-| File | Lý do unused | Quyết định |
-|------|-------------|-----------|
-| `trade_engine.py` | Phiên bản mới hơn TradeSimulator với dataclass + pending orders — tốt hơn nhưng chưa wire up | Tích hợp hoặc xóa |
-| `prediction_engine.py` | EMA-smoothed predictor tốt hơn extrapolation hiện tại | Tích hợp hoặc xóa |
-| `training_engine.py` | Buffered weight updates | Tích hợp hoặc xóa |
-| `position_manager.py` | Không import ở đâu | Xóa |
-| `core_trading_system.py` | Có `app = FastAPI()` riêng → conflict; không dùng | Xóa |
+Tất cả dead code đã được xử lý:
+
+| File | Kết quả | Lý do |
+|------|---------|-------|
+| `position_manager.py` | **ĐÃ XÓA** | Không import ở đâu |
+| `core_trading_system.py` | **ĐÃ XÓA** | Có `app = FastAPI()` riêng → conflict, mock data, hoàn toàn lỗi thời |
+| `training_engine.py` | **ĐÃ XÓA** | AdaptiveScorer hiện tại mạnh hơn (8 indicators, reverse mode, EMA winrate) |
+| `trade_engine.py` | **ĐÃ XÓA** | Pending orders hay nhưng integration cần refactor lớn; TradeSimulator hiện tại ổn định |
+| `prediction_engine.py` | **ĐÃ INTEGRATE** | EMA-smoothed prediction, BB-adjusted ranges, momentum factor — tốt hơn linear extrapolation |
+
+**Kết quả sau dọn dẹp — file Python active:**
+```
+ai_advisor.py        indicator_layer.py   prediction_engine.py  simulator_manager.py
+config.py            main.py              signal_engine.py
+data_layer.py        
+```
 
 ---
 
 ## 15. ROADMAP (từ CLAUDE.md)
 
-### Phase 1 — Stability ✅ (phần lớn đã làm)
+### Phase 1 — Stability ✅ HOÀN THÀNH
 - Fix BUG-001..004 (None guards, Pydantic, MTF align) ✅
 - Fix BUG-005 (evaluate_and_learn dùng curr close) ✅
-- Fix BUG-006 (safe key access) — còn thiếu
+- Fix BUG-006 (safe key access + try/except per-line) ✅
+- Fix BUG-007 (simulator_manager trả list) ✅
 
-### Phase 2 — Performance (đang làm dần)
+### Phase 2 — Performance ✅ HOÀN THÀNH
 - Indicator cache (MTF) ✅ — `apply_indicators_cached`
 - Async bootstrap ✅ — `httpx.AsyncClient`
-- Async file I/O — chưa (cần `aiofiles`)
+- Async file I/O ✅ — `run_in_executor` (không cần aiofiles)
 - Frontend RAF throttle ✅ — `scheduleRender`
+- In-place DataFrame rotation ✅ — numpy shift thay pd.concat (BUG-010)
+- Vectorized FULL_LOAD history ✅ — tolist()+zip thay iterrows (BUG-012)
 
-### Phase 3 — Features
-- Integrate `trade_engine.py` (pending orders, leverage)
-- Integrate `prediction_engine.py` (EMA-smoothed predictor)
+### Phase 3 — Features (còn lại)
+- ~~Integrate `trade_engine.py`~~ → Đã xóa (không tích hợp)
+- ~~Integrate `prediction_engine.py`~~ → ✅ ĐÃ INTEGRATE
 - Alert system (sound/browser notification)
 - Multi-symbol dashboard (4 mini-charts)
 - PnL Chart (capital curve)
