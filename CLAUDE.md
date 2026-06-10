@@ -1,5 +1,13 @@
 # CLAUDE.md — Production Quant Trading Terminal
 
+## Working Rules
+
+**MANDATORY — Trước và sau mọi thay đổi code/logic:**
+1. **TRƯỚC khi sửa:** Đọc `PROJECT_DEEP_DIVE.md` để nắm context chính xác của phần sẽ chỉnh sửa.
+2. **SAU khi sửa:** Cập nhật `PROJECT_DEEP_DIVE.md` để phản ánh đúng trạng thái mới — section liên quan đến thay đổi vừa thực hiện.
+
+---
+
 ## Project Overview
 Real-time cryptocurrency trading terminal. Python FastAPI backend streams Binance WebSocket data, computes technical indicators, runs an adaptive ML signal engine, and pushes results to a browser-based chart via WebSocket.
 
