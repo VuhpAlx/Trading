@@ -1,7 +1,7 @@
 # PROJECT DEEP DIVE — Quant Trading Terminal
 
 > Tài liệu chi tiết toàn bộ cấu trúc, logic xử lý, và UI của hệ thống.  
-> Cập nhật: 2026-06-10
+> Cập nhật: 2026-06-10 (pandas 3.x CoW fix + timestamp fix)
 
 ---
 
@@ -210,7 +210,7 @@ for ind, val in raw_sigs.items():
 
 `factor` = `{"WIN": 1.0, "PARTIAL": 0.2, "LOSS": -0.8}`
 
-#### Prediction evaluation
+#### Prediction evaluation (Batch Learning)
 
 `register_prediction(target_time, payload)`:
 - target_time = `c_time + tf_seconds * 5` (ví dụ 1m: cộng thêm 5 phút)
@@ -222,9 +222,11 @@ for ind, val in raw_sigs.items():
 - **WIN**: đúng hướng VÀ trong range
 - **PARTIAL**: đúng hướng nhưng ngoài range
 - **LOSS**: sai hướng
-- Gọi `_adjust_weights()` với `lr=0.05`
-- Update `ema_winrate` (alpha=0.15)
+- **Không** gọi `_adjust_weights()` ngay — push vào `_learning_buffer` (list of tuples)
+- Update `ema_winrate` (alpha=0.15) ngay — đây chỉ là display, không cần batch
 - Ghi vào JSONL log
+- **Khi `len(_learning_buffer) >= 20`**: gọi `_adjust_weights()` cho toàn bộ buffer rồi clear
+- Lý do batch: tránh overfit noise 1 phút; weights chỉ thay đổi sau khi có đủ trend signal
 
 #### EMA Winrate
 
@@ -245,16 +247,31 @@ Half-life ~4 trades — phản ứng nhanh hơn simple winrate.
 
 ### 6.2 TradeSimulator — Auto trade
 
-**Vòng đời trade:**
-1. `open_position()` → state="LONG"/"SHORT", tính TP/SL
-2. `process_tick()` mỗi tick → kiểm tra SL/TP hit
-3. Khi close → log vào JSONL, cộng/trừ capital, cooldown 5 bars
+**Class constants:**
+```python
+MAKER_FEE = 0.0000   # Limit order (không dùng mặc định)
+TAKER_FEE = 0.0010   # 0.1% market taker fee mỗi chiều (Binance VIP0)
+SLIPPAGE  = 0.0002   # 0.02% market impact mỗi fill
+```
 
-**TP/SL sizing (risk-adjusted):**
+**Vòng đời trade:**
+1. `open_position()` → tính actual_entry với slippage, tính TP/SL từ actual_entry, store entry_fee
+2. `process_tick()` được gọi từ `main.py` mỗi tick (không còn trong generate_signal)
+3. Khi close → tính exit với slippage, trừ entry_fee + exit_fee, log net_profit, cooldown 5 bars
+
+**Entry (Market order):**
+```python
+actual_entry = price * (1 + mult * SLIPPAGE)
+# LONG:  actual_entry = price * 1.0002 (mua cao hơn)
+# SHORT: actual_entry = price * 0.9998 (bán thấp hơn)
+entry_fee = volume_usd * TAKER_FEE
+```
+
+**TP/SL sizing từ actual_entry:**
 ```python
 raw_sl  = atr * 1.5
-max_sl  = price * 0.0025   # Hard cap 0.25%
-min_sl  = price * 0.0005   # Hard floor 0.05%
+max_sl  = actual_entry * 0.0025
+min_sl  = actual_entry * 0.0005
 sl_dist = clamp(min_sl, raw_sl, max_sl)
 tp_dist = sl_dist * 1.8    # R:R = 1:1.8
 ```
@@ -262,23 +279,39 @@ tp_dist = sl_dist * 1.8    # R:R = 1:1.8
 **Position sizing:**
 ```python
 pos_size   = (capital * risk_pct) / sl_dist   # risk_pct = 1.5%
-volume_usd = pos_size * price
+volume_usd = pos_size * actual_entry
 ```
 
-**TP/SL hit check (với buffer nhỏ tránh false trigger):**
+**TP/SL hit check:**
 ```python
-sl_buf = entry * 0.0002   # 0.02% buffer
+sl_buf = entry * 0.0002   # 0.02% buffer tránh false trigger
 # LONG:
-if low  <= (sl - sl_buf)  → LOSS
-if high >= tp             → WIN
+if low  <= (sl - sl_buf)  → LOSS; exit_p = sl * (1 - SLIPPAGE)
+if high >= tp             → WIN;  exit_p = tp * (1 - SLIPPAGE)
 # SHORT:
-if high >= (sl + sl_buf)  → LOSS
-if low  <= tp             → WIN
+if high >= (sl + sl_buf)  → LOSS; exit_p = sl * (1 + SLIPPAGE)
+if low  <= tp             → WIN;  exit_p = tp * (1 + SLIPPAGE)
+```
+
+**PnL calculation (net of fees):**
+```python
+exit_fee    = exit_p * size * TAKER_FEE
+gross_profit = (exit_p - actual_entry) * size * mult
+net_profit   = gross_profit - entry_fee - exit_fee
+final_pnl    = (net_profit / (actual_entry * size)) * 100
+```
+
+**Live P&L (intra-tick, còn đang mở):**
+```python
+gross_live   = (current_price - entry) * size * mult
+exit_fee_est = current_price * size * TAKER_FEE
+net_live     = gross_live - entry_fee - exit_fee_est  # estimate, cập nhật mỗi tick
 ```
 
 **Cooldown:** 5 bars sau khi đóng trade — tránh re-entry ngay lập tức.
 
 **Lưu history:** 20 trades gần nhất trong RAM; unlimited trong JSONL.
+**JSONL thêm field:** `fees_usd` (entry_fee + exit_fee tổng cộng).
 
 ---
 
@@ -407,6 +440,12 @@ res_out["trade"]          = { position_status, entry, tp, sl, pnl, capital... }
 
 Độc lập với TradeSimulator — xử lý lệnh do user đặt tay.
 
+**Class constants:**
+```python
+TAKER_FEE = 0.0010   # 0.1% per side
+SLIPPAGE  = 0.0002   # 0.02% market impact
+```
+
 ```python
 class ManualTradeSimulator:
     active_trades: List[dict]   # Các lệnh đang mở
@@ -423,8 +462,10 @@ class ManualTradeSimulator:
 - Duyệt tất cả active_trades:
   - `hit_tp = (LONG && price >= tp) || (SHORT && price <= tp)`
   - `hit_sl = (LONG && price <= sl) || (SHORT && price >= sl)`
-  - Nếu hit: tính PnL%, đưa vào history, loại khỏi active
-- **Trả về LIST tất cả trades đóng** trong tick này (khác bản cũ chỉ trả 1)
+  - Nếu hit: áp dụng exit slippage (`exit = price * (1 - mult * SLIPPAGE)`), tính PnL% net of round-trip fees
+  - PnL = `price_move_pct - TAKER_FEE * 2 * 100` (0.2% phí 2 chiều)
+  - Đưa vào history, loại khỏi active
+- **Trả về LIST tất cả trades đóng** trong tick này
 - `history` giữ tối đa 50 entries
 
 ---
@@ -791,25 +832,28 @@ data_layer._update_cache(msg)
         ▼
 on_market_tick(symbol, interval, is_closed, tick_data)
   │
-  ├─ ManualTradeSimulator.update_tick(price)
+  ├─ ManualTradeSimulator.update_tick(price)            ← ALWAYS
   │      → broadcast MANUAL_TRADE_CLOSED nếu có
   │
-  ├─ indicator_layer.apply_indicators(df_raw)           ← always fresh (current TF)
+  ├─ trade_sim.process_tick(price, high, low)           ← ALWAYS (lightweight)
+  │      → nếu closed: scorer.learn_from_real_trade()
   │
-  ├─ mtf_context build:
-  │      indicator_layer.apply_indicators_cached(...)   ← cached (5m, 15m, 1h)
+  ├─[is_closed=False] Intra-tick path ──────────────────────────────────┐
+  │      Broadcast TICK với cached ui_state + fresh trade/pnl          │
+  │      return ←───────────────────────────────────────────────────┘
   │
-  ├─ AdvancedSignalEngine.generate_signal(df_ind, mtf)
-  │      ├─ process_tick() → check auto TP/SL
-  │      ├─ evaluate_and_learn() → score past predictions
-  │      ├─ Compute 8 signal scores
-  │      ├─ Weighted sum → smoothed_score
-  │      ├─ Regime detect → threshold adapt
-  │      ├─ Entry decision (2-bar confirm)
-  │      ├─ Prediction register
-  │      └─ Build ui_state
-  │
-  └─ broadcast_to_symbol(TICK message)
+  ├─[is_closed=True] Full pipeline ────────────────────────────────────┐
+  │   indicator_layer.apply_indicators(df_raw)                        │
+  │   mtf_context build: apply_indicators_cached(...)                 │
+  │   AdvancedSignalEngine.generate_signal(df_ind, mtf)               │
+  │      ├─ evaluate_and_learn() → buffer; batch _adjust_weights @20  │
+  │      ├─ Compute 8 signal scores                                   │
+  │      ├─ Weighted sum → smoothed_score                             │
+  │      ├─ Regime detect → threshold adapt                           │
+  │      ├─ Entry decision (2-bar confirm)                            │
+  │      ├─ Prediction register                                       │
+  │      └─ Build ui_state                                            │
+  └─ broadcast_to_symbol(TICK message) ←──────────────────────────────┘
              │
              ▼
        Browser WebSocket
@@ -889,9 +933,9 @@ Ghi mỗi khi auto trade đóng (async via `run_in_executor`, non-blocking):
 |-----|-------|-----------|
 | BUG-008 | Bootstrap sync với requests.get | **ĐÃ FIX** (httpx async) |
 | BUG-009 | Full 5000-row indicator recompute mỗi tick | **ĐÃ CẢI THIỆN** (INDICATOR_WINDOW=260 + cached MTF) |
-| BUG-010 | pd.concat allocate DataFrame mỗi nến mới | **ĐÃ FIX** — numpy in-place shift per column (`buf[:-1]=buf[1:]`), timestamp dùng `pandas.shift(-1)`. Không tạo DataFrame mới. |
+| BUG-010 | pd.concat allocate DataFrame mỗi nến mới | **ĐÃ FIX** — `to_numpy(copy=True)` trên (N,5) array, shift+assign qua pandas API. Tương thích pandas 3.x CoW (không còn dùng direct numpy view). |
 | BUG-011 | Sync `open(file,"a")` block event loop trong async tick | **ĐÃ FIX** — `asyncio.get_running_loop().run_in_executor(None, write_func)` trong cả `AdaptiveScorer._async_write` và `TradeSimulator._async_write` |
-| BUG-012 | iterrows() cho 200-candle history | **ĐÃ FIX** — vectorized: `.tolist()` per column + `zip()`, bỏ `sort()` dư thừa |
+| BUG-012 | iterrows() cho 200-candle history | **ĐÃ FIX** — `[int(ts.timestamp()) for ts in tail['timestamp']]` thay `astype('int64')//10^9`. pandas 3.x đổi dtype sang `datetime64[ms,UTC]` nên `astype int64` cho ms không phải ns — timestamp bị sai hoàn toàn. |
 
 ### Frontend
 | Bug | Mô tả | Trạng thái |

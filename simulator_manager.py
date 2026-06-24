@@ -4,6 +4,10 @@ from typing import List
 
 
 class ManualTradeSimulator:
+    # Market order costs applied on exit
+    TAKER_FEE = 0.0010   # 0.1% per side (Binance standard)
+    SLIPPAGE  = 0.0002   # 0.02% market impact per fill
+
     def __init__(self):
         self.active_trades: List[dict] = []
         self.history: List[dict] = []
@@ -15,7 +19,7 @@ class ManualTradeSimulator:
         self.active_trades.append(t)
 
     def update_tick(self, current_price: float) -> List[dict]:
-        """Check TP/SL. Returns list of ALL trades closed this tick."""
+        """Check TP/SL for all active manual trades. Returns list of ALL trades closed this tick."""
         closed = []
         still_active = []
 
@@ -32,12 +36,26 @@ class ManualTradeSimulator:
 
             if hit_tp or hit_sl:
                 ct = trade.copy()
-                ct['status']     = 'CLOSED'
-                ct['exit_price'] = current_price
-                ct['exit_time']  = datetime.now().isoformat()
-                ct['result']     = 'WIN' if hit_tp else 'LOSS'
-                mult             = 1 if pos == 'LONG' else -1
-                ct['pnl']        = round(((current_price - entry) / (entry + 1e-9)) * 100 * mult, 2)
+                ct['status']    = 'CLOSED'
+                ct['exit_time'] = datetime.now().isoformat()
+                ct['result']    = 'WIN' if hit_tp else 'LOSS'
+
+                mult = 1 if pos == 'LONG' else -1
+
+                # Market exit: LONG sells lower than current price, SHORT covers higher
+                # Formula: exit_actual = price * (1 - mult * SLIPPAGE)
+                #   LONG  (mult=+1): exit = price * (1 - 0.0002) — sold slightly below
+                #   SHORT (mult=-1): exit = price * (1 + 0.0002) — covered slightly above
+                exit_actual = current_price * (1 - mult * self.SLIPPAGE)
+                ct['exit_price'] = round(exit_actual, 4)
+
+                # Gross % move from user's entry to slippage-adjusted exit
+                price_move_pct = ((exit_actual - entry) / (entry + 1e-9)) * 100 * mult
+
+                # Deduct round-trip taker fees: entry side + exit side = 2 × TAKER_FEE
+                round_trip_fee_pct = self.TAKER_FEE * 2 * 100   # = 0.20%
+                ct['pnl'] = round(price_move_pct - round_trip_fee_pct, 2)
+
                 self.history.insert(0, ct)
                 closed.append(ct)
             else:

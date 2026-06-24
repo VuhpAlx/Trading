@@ -70,8 +70,10 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
         return
 
     current_price = tick_data['close']
+    tick_high     = tick_data.get('high', current_price)
+    tick_low      = tick_data.get('low',  current_price)
 
-    # Check manual TP/SL
+    # --- Always: manual TP/SL check ---
     closed_manual_trades = engine.manual_sim.update_tick(current_price)
     for ct in closed_manual_trades:
         await connection_manager.broadcast_to_symbol(
@@ -79,34 +81,63 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
             symbol, interval,
         )
 
-    # Get cached raw data
+    # --- Always: auto TP/SL check (lightweight — no indicator recompute) ---
+    closed_trade = engine.trade_sim.process_tick(current_price, tick_high, tick_low)
+    if closed_trade:
+        engine.scorer.learn_from_real_trade(
+            closed_trade["snapshot"], closed_trade["direction"], closed_trade["result"]
+        )
+
+    if not is_closed:
+        # Intra-tick: candle still forming — skip expensive indicator recompute.
+        # Broadcast cached signal state with fresh price + live P&L from trade dict.
+        analysis = engine.ui_state.copy()
+        analysis["notifications"]  = engine.trade_sim.get_notifications()
+        analysis["trade_history"]  = engine.trade_sim.history[:10]
+        analysis["manual_active"]  = engine.manual_sim.active_trades
+        analysis["manual_history"] = engine.manual_sim.history
+
+        # Trade dict was updated by process_tick above (pnl_pct/profit_usd already fresh)
+        t     = engine.trade_sim.trade
+        state = engine.trade_sim.state
+        analysis["trade"] = {
+            "position_status": "OPEN" if state != "NONE" else "NONE",
+            "entry":         round(t.get('entry',      0.0), 4) if state != "NONE" else None,
+            "tp":            round(t.get('tp',          0.0), 4) if state != "NONE" else None,
+            "sl":            round(t.get('sl',          0.0), 4) if state != "NONE" else None,
+            "pnl":           round(t.get('pnl_pct',    0.0), 2),
+            "profit_usd":    round(t.get('profit_usd', 0.0), 2),
+            "position_size": round(t.get('size',       0.0), 6),
+            "capital":       round(engine.trade_sim.capital, 2),
+        }
+
+        await connection_manager.broadcast_to_symbol(
+            json.dumps({"type": "TICK", "symbol": symbol, "candle": tick_data, "signal": analysis}),
+            symbol, interval,
+        )
+        return
+
+    # --- Candle closed: full indicator + signal pipeline ---
     df_raw = data_manager.cache.get(symbol, {}).get(interval)
     if df_raw is None or df_raw.empty:
         return
 
-    # Compute indicators for current interval (always fresh — close price changes)
     df_ind = indicator_layer.apply_indicators(df_raw)
 
-    # MTF context — FIXED: use 5m, 15m, 1h (matches signal_engine expectation)
     mtf_context = {}
     for tf in ("5m", "15m", "1h"):
         df_tf = data_manager.cache.get(symbol, {}).get(tf)
         if df_tf is not None and not df_tf.empty:
-            # Use cached version — only recomputes when candle closes
             mtf_context[tf] = indicator_layer.apply_indicators_cached(df_tf, symbol, tf)
 
-    # Generate signal
     analysis = engine.generate_signal(df_ind, mtf_context)
     analysis["manual_active"]  = engine.manual_sim.active_trades
     analysis["manual_history"] = engine.manual_sim.history
 
-    message = json.dumps({
-        "type":   "TICK",
-        "symbol": symbol,
-        "candle": tick_data,
-        "signal": analysis,
-    })
-    await connection_manager.broadcast_to_symbol(message, symbol, interval)
+    await connection_manager.broadcast_to_symbol(
+        json.dumps({"type": "TICK", "symbol": symbol, "candle": tick_data, "signal": analysis}),
+        symbol, interval,
+    )
 
 
 data_manager.on_tick_callback = on_market_tick
@@ -171,8 +202,9 @@ async def websocket_endpoint(ws: WebSocket):
                     tail   = df_ind.tail(200)
 
                     # Vectorized build — ~5× faster than iterrows()
-                    # Timestamps are already in ascending order from Binance
-                    times  = (tail['timestamp'].astype('int64') // 10 ** 9).tolist()
+                    # Timestamps are already in ascending order from Binance.
+                    # Use .timestamp() to avoid pandas-version-dependent astype('int64') behaviour.
+                    times  = [int(ts.timestamp()) for ts in tail['timestamp']]
                     opens  = tail['open'].tolist()
                     highs  = tail['high'].tolist()
                     lows   = tail['low'].tolist()

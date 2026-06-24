@@ -1,4 +1,5 @@
 # data_layer.py
+import numpy as np
 import pandas as pd
 import httpx
 import websockets
@@ -89,20 +90,15 @@ class DataLayer:
             df.at[last_idx, 'close'] = float(k['c'])
             df.at[last_idx, 'volume'] = float(k['v'])
         else:
-            # New candle: in-place rotation — no DataFrame allocation
-            # Float columns: shift numpy backing array left by 1 (O(n) copy, no new object)
-            for col, raw_val in (
-                ('open',   k['o']),
-                ('high',   k['h']),
-                ('low',    k['l']),
-                ('close',  k['c']),
-                ('volume', k['v']),
-            ):
-                buf = df[col].values   # numpy float64 view of backing array
-                buf[:-1] = buf[1:]     # numpy handles overlapping copy safely
-                buf[-1]  = float(raw_val)
+            # New candle: rotate buffer.
+            # pandas 2.x CoW makes df[col].values read-only — must copy, modify, then assign back.
+            cols_ohlcv = ['open', 'high', 'low', 'close', 'volume']
+            arr = df[cols_ohlcv].to_numpy(copy=True)          # (N, 5) writeable float64 copy
+            arr[:-1] = arr[1:]                                  # shift all columns left by 1 row
+            arr[-1]  = [float(k['o']), float(k['h']),
+                        float(k['l']), float(k['c']), float(k['v'])]
+            df[cols_ohlcv] = arr                               # write back through pandas
 
-            # Timestamp column (DatetimeTZ): shift via pandas, set last cell
             df['timestamp'] = df['timestamp'].shift(periods=-1)
             df.at[df.index[-1], 'timestamp'] = tick_time
 

@@ -40,6 +40,11 @@ class AdaptiveScorer:
         self.stats = {"win": 0, "loss": 0, "partial": 0, "total": 0}
         self.reverse_mode: bool = False
 
+        # Batch learning buffer — weights only update every 20 evaluations
+        # to learn from trend rather than noise of individual predictions
+        self._learning_buffer: List[tuple] = []  # [(raw_sigs, direction, factor), ...]
+        self._batch_size: int = 20
+
         self._load_history()
 
     # ---------- history ----------
@@ -178,9 +183,13 @@ class AdaptiveScorer:
 
             self._apply_result_to_stats(result)
             factor = self._result_factor(result)
-            self._adjust_weights(p['raw_signals'], direction, factor, lr=0.05)
 
-            # EMA update for live winrate
+            # Buffer result instead of updating weights immediately.
+            # _adjust_weights only fires when buffer reaches _batch_size (20)
+            # to avoid overfitting to noise in individual 1-minute predictions.
+            self._learning_buffer.append((p['raw_signals'], direction, factor))
+
+            # EMA winrate updates immediately (no need to batch — it's display only)
             alpha = 0.15
             is_win = 1.0 if result == "WIN" else 0.0
             self.ema_winrate = alpha * is_win * 100 + (1 - alpha) * self.ema_winrate
@@ -212,6 +221,16 @@ class AdaptiveScorer:
 
         for k in resolved:
             del self.pending_predictions[k]
+
+        # Batch weight update: only when buffer reaches threshold
+        if len(self._learning_buffer) >= self._batch_size:
+            for raw_sigs, direction, factor in self._learning_buffer:
+                self._adjust_weights(raw_sigs, direction, factor, lr=0.05)
+            self._learning_buffer.clear()
+            logger.info(
+                f"[{self.symbol}/{self.timeframe}] Batch weight update: "
+                f"{self._batch_size} predictions processed"
+            )
 
     # ---------- async file write ----------
 
@@ -247,6 +266,11 @@ class AdaptiveScorer:
 # 2. TRADE SIMULATOR — Auto execution
 # ==========================================
 class TradeSimulator:
+    # Market order costs — applied to both entry and exit fills
+    MAKER_FEE = 0.0000   # Limit order fee (unused by default — all fills are market/taker)
+    TAKER_FEE = 0.0010   # 0.1% market taker fee per side (Binance standard VIP0)
+    SLIPPAGE  = 0.0002   # 0.02% market impact per fill (realistic for mid-cap crypto)
+
     def __init__(self, symbol: str, timeframe: str, capital: float = 100.0, risk_pct: float = 0.015):
         self.symbol = symbol
         self.timeframe = timeframe
@@ -307,33 +331,42 @@ class TradeSimulator:
             return
 
         self.state = "LONG" if side == "BUY" else "SHORT"
+        mult = 1 if self.state == "LONG" else -1
 
-        # Risk-adjusted TP/SL sizing
+        # Market order fill: LONG buys slightly higher, SHORT sells slightly lower
+        # actual_entry is what the trade is accounted at (slippage-adjusted)
+        actual_entry = price * (1 + mult * self.SLIPPAGE)
+
+        # Risk-adjusted TP/SL from actual fill price
         raw_sl  = atr * 1.5
-        max_sl  = price * 0.0025   # Hard cap: 0.25% max
-        min_sl  = price * 0.0005   # Hard floor: 0.05% min
+        max_sl  = actual_entry * 0.0025   # Hard cap: 0.25%
+        min_sl  = actual_entry * 0.0005   # Hard floor: 0.05%
         sl_dist = max(min_sl, min(raw_sl, max_sl))
-        tp_dist = sl_dist * 1.8    # R:R = 1:1.8
+        tp_dist = sl_dist * 1.8           # R:R = 1:1.8
 
-        if self.state == "LONG":
-            sl = price - sl_dist
-            tp = price + tp_dist
-        else:
-            sl = price + sl_dist
-            tp = price - tp_dist
+        sl = actual_entry - mult * sl_dist
+        tp = actual_entry + mult * tp_dist
 
-        pos_size  = (self.capital * self.risk_pct) / sl_dist
-        volume_usd = pos_size * price
+        pos_size   = (self.capital * self.risk_pct) / sl_dist
+        volume_usd = pos_size * actual_entry
+        # Entry fee paid upfront (sunk cost, used in live P&L calculation)
+        entry_fee  = volume_usd * self.TAKER_FEE
 
         self.trade = {
-            "entry_time": timestamp, "entry": price, "position": self.state,
+            "entry_time": timestamp,
+            "entry": round(actual_entry, 4),   # Actual fill price post-slippage
+            "position": self.state,
             "sl": round(sl, 4), "tp": round(tp, 4),
             "size": pos_size, "volume_usd": volume_usd,
-            "snapshot": indicators_snap, "pnl_pct": 0.0, "profit_usd": 0.0,
+            "entry_fee": entry_fee,             # Stored for live P&L netting
+            "snapshot": indicators_snap,
+            "pnl_pct": 0.0, "profit_usd": 0.0,
         }
         self.just_opened = True
         self.notifications.append(
-            f"🟢 OPEN {self.state}\nEntry: {price:.2f} | Vol: {volume_usd:.2f}$\nTP: {tp:.2f} | SL: {sl:.2f}"
+            f"🟢 OPEN {self.state}\n"
+            f"Entry: {actual_entry:.2f} | Vol: {volume_usd:.2f}$\n"
+            f"TP: {tp:.2f} | SL: {sl:.2f} | Fee: {entry_fee:.3f}$"
         )
 
     def process_tick(self, current_price: float, high: float, low: float) -> Optional[dict]:
@@ -343,29 +376,51 @@ class TradeSimulator:
             self.just_opened = False
             return None
 
-        t = self.trade
+        t    = self.trade
         mult = 1 if self.state == "LONG" else -1
-        t['pnl_pct']    = ((current_price - t['entry']) / t['entry']) * 100 * mult
-        t['profit_usd'] = (current_price - t['entry']) * t['size'] * mult
 
-        sl_buf   = t['entry'] * 0.0002
+        # Live mark-to-market P&L — net of sunk entry fee + estimated exit fee at current price
+        gross_live   = (current_price - t['entry']) * t['size'] * mult
+        exit_fee_est = current_price * t['size'] * self.TAKER_FEE
+        net_live     = gross_live - t['entry_fee'] - exit_fee_est
+        t['pnl_pct']    = (net_live / (t['entry'] * t['size'] + 1e-9)) * 100
+        t['profit_usd'] = net_live
+
+        sl_buf    = t['entry'] * 0.0002
         is_closed = False
         res       = ""
 
         if self.state == "LONG":
-            if low  <= (t['sl'] - sl_buf):  is_closed = True; res = "LOSS"; exit_p = t['sl']
-            elif high >= t['tp']:            is_closed = True; res = "WIN";  exit_p = t['tp']
+            if low <= (t['sl'] - sl_buf):
+                is_closed = True; res = "LOSS"
+                # Stopped out: sell at SL minus slippage (market executes below order price)
+                exit_p = t['sl'] * (1 - self.SLIPPAGE)
+            elif high >= t['tp']:
+                is_closed = True; res = "WIN"
+                # TP hit: sell at TP minus slippage
+                exit_p = t['tp'] * (1 - self.SLIPPAGE)
         else:
-            if high >= (t['sl'] + sl_buf):  is_closed = True; res = "LOSS"; exit_p = t['sl']
-            elif low  <= t['tp']:            is_closed = True; res = "WIN";  exit_p = t['tp']
+            if high >= (t['sl'] + sl_buf):
+                is_closed = True; res = "LOSS"
+                # Short stopped out: cover at SL plus slippage
+                exit_p = t['sl'] * (1 + self.SLIPPAGE)
+            elif low <= t['tp']:
+                is_closed = True; res = "WIN"
+                # Short TP: cover at TP plus slippage
+                exit_p = t['tp'] * (1 + self.SLIPPAGE)
 
         if not is_closed:
             return None
 
-        final_profit = (exit_p - t['entry']) * t['size'] * mult
-        final_pnl    = ((exit_p - t['entry']) / t['entry']) * 100 * mult
-        cap_before   = self.capital
-        self.capital += final_profit
+        # Net profit after both sides' fees
+        exit_fee     = exit_p * t['size'] * self.TAKER_FEE
+        gross_profit = (exit_p - t['entry']) * t['size'] * mult
+        net_profit   = gross_profit - t['entry_fee'] - exit_fee
+        final_pnl    = (net_profit / (t['entry'] * t['size'] + 1e-9)) * 100
+        total_fees   = t['entry_fee'] + exit_fee
+
+        cap_before    = self.capital
+        self.capital += net_profit
 
         log_entry = {
             "symbol": self.symbol, "timeframe": self.timeframe,
@@ -374,7 +429,8 @@ class TradeSimulator:
             "position": t["position"],
             "capital_before": round(cap_before, 2), "capital_after": round(self.capital, 2),
             "risk_pct": self.risk_pct, "position_size": round(t["size"], 6),
-            "profit_usd": round(final_profit, 2), "pnl": round(final_pnl, 2), "result": res,
+            "fees_usd": round(total_fees, 4),
+            "profit_usd": round(net_profit, 2), "pnl": round(final_pnl, 2), "result": res,
         }
         self._async_write(self.trade_log_file, log_entry)
 
@@ -383,12 +439,14 @@ class TradeSimulator:
 
         icon = "🔴" if res == "LOSS" else "🔵"
         self.notifications.append(
-            f"{icon} CLOSED {res}\nPnL: {final_pnl:.2f}%  Profit: {final_profit:.2f}$"
+            f"{icon} CLOSED {res}\n"
+            f"PnL: {final_pnl:.2f}%  Net: {net_profit:.2f}$\n"
+            f"Fees: {total_fees:.3f}$"
         )
 
         closed_data = {"snapshot": t["snapshot"], "direction": self.state, "result": res}
-        self.state   = "NONE"
-        self.trade   = {}
+        self.state    = "NONE"
+        self.trade    = {}
         self.cooldown = 5
         return closed_data
 
@@ -492,12 +550,9 @@ class AdvancedSignalEngine:
         c_time  = int(curr['timestamp'].timestamp())
         c_time_str = datetime.fromtimestamp(c_time).strftime('%H:%M:%S')
 
-        # --- Auto-trade TP/SL check ---
-        closed_trade = self.trade_sim.process_tick(c_price, c_high, c_low)
-        if closed_trade:
-            self.scorer.learn_from_real_trade(
-                closed_trade["snapshot"], closed_trade["direction"], closed_trade["result"]
-            )
+        # Auto-trade TP/SL check and learn_from_real_trade have been moved to
+        # on_market_tick() in main.py for tick-isolation (called on every tick,
+        # not only when candle closes). generate_signal() only runs on candle close.
 
         # --- Extract indicators ---
         ema9   = self._safe(curr.get('EMA_9'),   c_price)

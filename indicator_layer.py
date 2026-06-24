@@ -100,4 +100,7 @@ class IndicatorLayer:
         except Exception as e:
             logger.warning(f"Volume error: {e}")
 
-        return df.bfill().ffill().fillna(0.0)
+        # Only fill NaN for numeric columns — avoids corrupting the timestamp column in pandas 2.x.
+        num_cols = df.select_dtypes(include='number').columns
+        df[num_cols] = df[num_cols].bfill().ffill().fillna(0.0)
+        return df
