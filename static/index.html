@@ -192,6 +192,28 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
     </div>
   </div>
 
+  <!-- Decision Reasoning (Top-Down) -->
+  <div class="card" style="border-color:#26a69a">
+    <h3 style="color:#26a69a" title="Quy trình top-down: (1) xu hướng khung lớn → (2) vùng giá S/R → (3) tín hiệu vào lệnh. Chỉ vào lệnh khi đủ điều kiện & R:R sau phí ≥ 1.5">🧭 Phân Tích Quyết Định</h3>
+    <div class="info-row" title="Xu hướng chủ đạo ở khung lớn hơn. Hệ thống CHỈ giao dịch thuận chiều này.">
+      <span class="lbl">Bias khung lớn</span>
+      <strong id="bias-badge" class="gray">—</strong>
+    </div>
+    <div id="bias-tfs" style="font-size:10px;color:#848E9C;margin-top:2px"></div>
+    <div class="info-row" title="Vùng giá thị trường hay phản ứng. Mua gần hỗ trợ, bán gần kháng cự.">
+      <span class="lbl">Kháng cự gần</span>
+      <span id="near-res" class="red">—</span>
+    </div>
+    <div class="info-row">
+      <span class="lbl">Hỗ trợ gần</span>
+      <span id="near-sup" class="green">—</span>
+    </div>
+    <div style="margin-top:6px" title="Các yếu tố ủng hộ/phản đối lệnh. ✓ = thuận, ✗/⚠️ = cảnh báo.">
+      <div class="lbl" style="margin-bottom:4px">Lý do (confluence)</div>
+      <div id="reasons-list" style="font-size:11px;line-height:1.6;color:#B0C4DE">Đang phân tích…</div>
+    </div>
+  </div>
+
   <!-- Individual Signals -->
   <div class="card">
     <h3>📊 Signal Breakdown</h3>
@@ -258,9 +280,13 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
       <span class="lbl">Status</span>
       <strong id="trade-status">NONE</strong>
     </div>
+    <div class="info-row" title="Khối lượng theo lot (kiểu Exness). Bot tự tăng lot khi tín hiệu mạnh."><span class="lbl">Lot × Đòn bẩy</span><span id="trade-lot" class="gold">---</span></div>
     <div class="info-row"><span class="lbl">Entry</span><span id="trade-entry">---</span></div>
     <div class="info-row"><span class="lbl">TP</span><span id="trade-tp" class="green">---</span></div>
     <div class="info-row"><span class="lbl">SL</span><span id="trade-sl" class="red">---</span></div>
+    <div class="info-row" title="Ký quỹ bị khóa = giá trị hợp đồng / đòn bẩy."><span class="lbl">Ký quỹ (margin)</span><span id="trade-margin">---</span></div>
+    <div class="info-row" title="Giá mà tại đó lệnh bị sàn tự đóng (cháy) do lỗ ăn gần hết ký quỹ."><span class="lbl">Giá thanh lý</span><span id="trade-liq" class="purple">---</span></div>
+    <div class="info-row" title="Margin level = equity/margin. ≤50% sẽ bị thanh lý. Càng cao càng an toàn."><span class="lbl">Equity / Mgn level</span><span id="trade-marlvl">---</span></div>
     <div class="info-row">
       <span class="lbl">Live P&L</span>
       <strong id="trade-profit" style="font-size:13px">---</strong>
@@ -300,10 +326,15 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
       <button id="btn-sl" class="tool-btn">SL 🎯</button>
       <input type="number" id="m-sl" class="manual-input" placeholder="0.00">
     </div>
+    <div class="info-row" style="gap:6px" title="Khối lượng lot. 0.01 = micro lot (nhỏ nhất). Lot lớn → lãi/lỗ lớn → margin cao.">
+      <span class="lbl">Lot (×0.01)</span>
+      <input type="number" id="m-lot" class="manual-input" value="0.01" min="0.01" step="0.01">
+    </div>
     <div class="info-row" style="border-top:1px solid #2B3139;padding-top:6px;margin-top:6px">
       <span class="lbl">Risk/Reward</span>
       <strong id="m-rr" style="font-size:15px">0.00</strong>
     </div>
+    <div class="info-row" title="Ký quỹ ước tính cho lot này."><span class="lbl">Margin ước tính</span><span id="m-margin" class="gray">---</span></div>
     <div id="ai-box"></div>
     <div style="display:flex;gap:6px;margin-top:8px">
       <button id="btn-analyze" style="flex:1;background:#B228FF;border-color:#B228FF;font-size:12px">AI Analyze</button>
@@ -362,9 +393,13 @@ const ema9Series   = chart.addSeries(LineSeries, { color:'#2962FF', lineWidth:1.
 const ema21Series  = chart.addSeries(LineSeries, { color:'#FF6D00', lineWidth:1.5 });
 const predSeries   = chart.addSeries(LineSeries, { color:'#B228FF', lineWidth:1.5, lineStyle:2 });
 
-let entryLine=null, tpLine=null, slLine=null;
+let entryLine=null, tpLine=null, slLine=null, liqLine=null;
 let mEntryLine=null, mTpLine=null, mSlLine=null;
+let srLines=[];   // đường hỗ trợ/kháng cự/pivot
 let activeClickMode=null;
+
+const LEVERAGE = 100;   // khớp config.py LEVERAGE (để ước tính margin phía client)
+const CONTRACT = 1.0;   // 1 lot = 1 coin (khớp CONTRACT_SIZE mặc định)
 
 // ─── RAF batching ──────────────────────────────────────────
 // All DOM updates are queued and drained once per animation frame
@@ -408,6 +443,7 @@ const inpE = document.getElementById('m-entry');
 const inpT = document.getElementById('m-tp');
 const inpS = document.getElementById('m-sl');
 const selP = document.getElementById('manual-pos');
+const inpLot = document.getElementById('m-lot');
 const aiBox = document.getElementById('ai-box');
 const cHint = document.getElementById('cursor-hint');
 
@@ -443,6 +479,7 @@ function updateManualLines() {
 }
 
 function calcRR(e,t,s) {
+  updateMargin(e);
   if (!e||!t||!s) { setText('m-rr','0.00'); setStyle('m-rr','color','#D9D9D9'); return; }
   const risk=Math.abs(e-s), reward=Math.abs(t-e);
   if (!risk) return;
@@ -451,7 +488,17 @@ function calcRR(e,t,s) {
   setStyle('m-rr','color', parseFloat(rr)>=1.5?'#00FF00':'#FF0000');
 }
 
+function updateMargin(e){
+  const lot=parseFloat(inpLot.value)||0;
+  if(!e||!lot){ setText('m-margin','---'); return; }
+  const margin = lot*CONTRACT*e/LEVERAGE;        // = notional / đòn bẩy
+  const cap = parseFloat(document.getElementById('capitalInput').value)||100;
+  setText('m-margin', margin.toFixed(2)+' $');
+  setStyle('m-margin','color', margin>cap?'#FF0000':(margin>cap*0.5?'#FFA500':'#848E9C'));
+}
+
 [inpE,inpT,inpS].forEach(el=>el.addEventListener('input',updateManualLines));
+inpLot.addEventListener('input', ()=>updateMargin(parseFloat(inpE.value)));
 selP.addEventListener('change', ()=>calcRR(parseFloat(inpE.value),parseFloat(inpT.value),parseFloat(inpS.value)));
 
 document.getElementById('btn-clear').onclick = () => {
@@ -473,12 +520,14 @@ document.getElementById('btn-analyze').onclick = async () => {
   try {
     const res=await fetch(`/trade/analyze?symbol=${sym}&interval=${tf}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({entry:e,tp:t,sl:s,position:selP.value})
+      body:JSON.stringify({entry:e,tp:t,sl:s,position:selP.value,lot:parseFloat(inpLot.value)||0.01})
     });
     const d=await res.json();
+    let extra='';
+    if(d.margin_usd!=null) extra+=`<br><span class="gray">Margin: ${d.margin_usd}$ | Liq: ${d.liq_price}</span>`;
     aiBox.innerHTML=d.suggestions?.length
-      ?'<strong>💡 AI Advisor:</strong><br>'+d.suggestions.join('<br><br>')
-      :`<strong style="color:#00FF00">✅ Kèo hợp lý! RR = ${d.rr}</strong>`;
+      ?'<strong>💡 AI Advisor:</strong><br>'+d.suggestions.join('<br><br>')+extra
+      :`<strong style="color:#00FF00">✅ Kèo hợp lý! RR = ${d.rr}</strong>`+extra;
   } catch { aiBox.innerHTML='<span style="color:#FF0000">Connection error</span>'; }
   finally { btn.disabled=false; btn.textContent='AI Analyze'; }
 };
@@ -501,7 +550,7 @@ document.getElementById('btn-open').onclick = async () => {
   try {
     const res=await fetch(`/trade/open-manual?symbol=${sym}&interval=${tf}`,{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({entry:e,tp:t,sl:s,position:pos})
+      body:JSON.stringify({entry:e,tp:t,sl:s,position:pos,lot:parseFloat(inpLot.value)||0.01})
     });
     const d=await res.json();
     if(d.status==='success'){
@@ -557,6 +606,27 @@ function renderConfDots(rawSigs) {
   }).join('');
 }
 
+// ─── Structure (S/R + pivot) price lines ───────────────────
+let _lastStructSig = '';
+function drawStructure(st) {
+  if (!st) return;
+  const sup = (st.supports||[]).slice(0,2);
+  const res = (st.resistances||[]).slice(0,2);
+  const pivotP = st.pivots ? st.pivots.P : null;
+  const sig = JSON.stringify([sup, res, pivotP]);
+  if (sig === _lastStructSig) return;   // không đổi → khỏi vẽ lại
+  _lastStructSig = sig;
+
+  srLines.forEach(l=>{ try{candleSeries.removePriceLine(l);}catch{} });
+  srLines = [];
+  res.forEach(r=> srLines.push(candleSeries.createPriceLine(
+    {price:r, color:'rgba(255,80,80,.55)', lineWidth:1, lineStyle:1, title:'R'})));
+  sup.forEach(s=> srLines.push(candleSeries.createPriceLine(
+    {price:s, color:'rgba(80,255,120,.55)', lineWidth:1, lineStyle:1, title:'S'})));
+  if (pivotP) srLines.push(candleSeries.createPriceLine(
+    {price:pivotP, color:'rgba(252,213,53,.6)', lineWidth:1, lineStyle:3, title:'Pivot'}));
+}
+
 // ─── Main tick renderer ────────────────────────────────────
 function renderTick(res) {
   const p = res.signal;
@@ -609,6 +679,33 @@ function renderTick(res) {
   // Confluence dots
   if (p.raw_signals) {
     setHTML('conf-dots', renderConfDots(p.raw_signals));
+  }
+
+  // ── Decision reasoning (top-down) ──
+  if (p.htf_bias) {
+    const b = p.htf_bias;
+    const bEl = document.getElementById('bias-badge');
+    if (bEl) {
+      bEl.textContent = `${b.bias} (${(b.strength??0).toFixed(2)})`;
+      bEl.className = b.bias==='BULL'?'green':(b.bias==='BEAR'?'red':'gray');
+    }
+    const tfs = (b.per_tf||[]).map(x=>{
+      const c = x.bias==='BULL'?'#00FF00':(x.bias==='BEAR'?'#FF0000':'#848E9C');
+      return `<span style="color:${c}">${x.timeframe||'?'}:${x.bias}</span>`;
+    }).join('  ');
+    setHTML('bias-tfs', tfs);
+  }
+  if (p.structure) {
+    const st = p.structure;
+    setText('near-res', st.nearest_resistance!=null
+      ? `${st.nearest_resistance} (${st.dist_to_resistance_pct??'?'}%)` : '—');
+    setText('near-sup', st.nearest_support!=null
+      ? `${st.nearest_support} (${st.dist_to_support_pct??'?'}%)` : '—');
+    drawStructure(st, res.candle.time - tzOff);
+  }
+  if (p.reasons) {
+    setHTML('reasons-list', p.reasons.length
+      ? p.reasons.map(r=>`<div>• ${r}</div>`).join('') : 'Đang theo dõi…');
   }
 
   // Signal breakdown bars
@@ -674,9 +771,16 @@ function renderTick(res) {
       stEl.textContent=t.position_status;
       stEl.className=t.position_status==='OPEN'?'green':'';
     }
+    setText('trade-lot',   t.lot?`${t.lot.toFixed(2)} × ${t.leverage||LEVERAGE}`:'---');
     setText('trade-entry', t.entry?t.entry.toFixed(4):'---');
     setText('trade-tp',    t.tp?t.tp.toFixed(4):'---');
     setText('trade-sl',    t.sl?t.sl.toFixed(4):'---');
+    setText('trade-margin',t.margin_usd!=null?t.margin_usd.toFixed(2)+' $':'---');
+    setText('trade-liq',   t.liq_price?t.liq_price.toFixed(4):'---');
+    if(t.position_status!=='NONE'){
+      setText('trade-marlvl', `${(t.equity??0).toFixed(2)}$ / ${(t.margin_level??0).toFixed(0)}%`);
+      setStyle('trade-marlvl','color', (t.margin_level??999)<=80?'#FF0000':((t.margin_level??999)<=150?'#FFA500':'#848E9C'));
+    } else { setText('trade-marlvl','---'); }
 
     const profitEl=document.getElementById('trade-profit');
     if(profitEl){
@@ -692,9 +796,10 @@ function renderTick(res) {
       else entryLine.applyOptions({price:t.entry});
       if(t.tp){ if(!tpLine) tpLine=candleSeries.createPriceLine({price:t.tp,color:'#00FF00',lineWidth:2,title:'AUTO TP'}); else tpLine.applyOptions({price:t.tp}); }
       if(t.sl){ if(!slLine) slLine=candleSeries.createPriceLine({price:t.sl,color:'#FF0000',lineWidth:2,title:'AUTO SL'}); else slLine.applyOptions({price:t.sl}); }
+      if(t.liq_price){ if(!liqLine) liqLine=candleSeries.createPriceLine({price:t.liq_price,color:'#B228FF',lineWidth:1,lineStyle:2,title:'LIQ 💥'}); else liqLine.applyOptions({price:t.liq_price}); }
     } else {
-      [entryLine,tpLine,slLine].forEach(l=>{ if(l) candleSeries.removePriceLine(l); });
-      entryLine=tpLine=slLine=null;
+      [entryLine,tpLine,slLine,liqLine].forEach(l=>{ if(l) candleSeries.removePriceLine(l); });
+      entryLine=tpLine=slLine=liqLine=null;
     }
   }
 
@@ -776,7 +881,7 @@ function renderTick(res) {
   // Notifications (toasts)
   if(p.notifications?.length>0){
     p.notifications.forEach(msg=>{
-      const c=msg.includes('🟢')?'#00FF00':(msg.includes('🔴')?'#FF0000':'#FCD535');
+      const c=msg.includes('🟢')?'#00FF00':((msg.includes('🔴')||msg.includes('💥'))?'#FF0000':'#FCD535');
       toast(msg, c);
     });
   }
@@ -798,9 +903,9 @@ function connectWS() {
       const res = JSON.parse(event.data);
 
       if (res.type === 'FULL_LOAD') {
-        // Remove existing auto-trade lines on symbol switch
-        [entryLine,tpLine,slLine].forEach(l=>{ if(l) candleSeries.removePriceLine(l); });
-        entryLine=tpLine=slLine=null;
+        // Remove existing auto-trade + structure lines on symbol switch
+        [entryLine,tpLine,slLine,liqLine,...srLines].forEach(l=>{ if(l) candleSeries.removePriceLine(l); });
+        entryLine=tpLine=slLine=liqLine=null; srLines=[]; _lastStructSig='';
 
         const tz = new Date().getTimezoneOffset()*60;
         const local = res.data.map(d=>({...d, time:d.time-tz}));

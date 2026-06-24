@@ -14,7 +14,8 @@ from ai_advisor import analyze_user_trade
 from data_layer import data_manager
 from indicator_layer import IndicatorLayer
 from signal_engine import AdvancedSignalEngine
-from config import SYMBOLS, TIMEFRAMES
+from config import SYMBOLS, TIMEFRAMES, HTF_MAP, MIN_LOT
+import lot_sizing
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MainApp")
@@ -100,14 +101,22 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
         # Trade dict was updated by process_tick above (pnl_pct/profit_usd already fresh)
         t     = engine.trade_sim.trade
         state = engine.trade_sim.state
+        is_open = state != "NONE"
+        equity = round(engine.trade_sim.capital + (t.get('profit_usd', 0.0) if is_open else 0.0), 2)
+        m_level = lot_sizing.margin_level_pct(equity, t.get('margin_usd', 0.0)) if is_open else 0.0
         analysis["trade"] = {
-            "position_status": "OPEN" if state != "NONE" else "NONE",
-            "entry":         round(t.get('entry',      0.0), 4) if state != "NONE" else None,
-            "tp":            round(t.get('tp',          0.0), 4) if state != "NONE" else None,
-            "sl":            round(t.get('sl',          0.0), 4) if state != "NONE" else None,
+            "position_status": "OPEN" if is_open else "NONE",
+            "entry":         round(t.get('entry',      0.0), 4) if is_open else None,
+            "tp":            round(t.get('tp',          0.0), 4) if is_open else None,
+            "sl":            round(t.get('sl',          0.0), 4) if is_open else None,
+            "lot":           t.get('lot', 0.0) if is_open else None,
+            "leverage":      t.get('leverage'),
+            "margin_usd":    round(t.get('margin_usd', 0.0), 2) if is_open else None,
+            "liq_price":     round(t.get('liq_price', 0.0), 4) if is_open else None,
+            "margin_level":  m_level,
+            "equity":        equity,
             "pnl":           round(t.get('pnl_pct',    0.0), 2),
             "profit_usd":    round(t.get('profit_usd', 0.0), 2),
-            "position_size": round(t.get('size',       0.0), 6),
             "capital":       round(engine.trade_sim.capital, 2),
         }
 
@@ -124,8 +133,10 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
 
     df_ind = indicator_layer.apply_indicators(df_raw)
 
+    # Build context các khung LỚN HƠN theo HTF_MAP (top-down) cho đúng khung
+    # đang giao dịch — vd 1m→[15m,1h], 1h→[4h,1d]. Dùng cache để khỏi tính lại.
     mtf_context = {}
-    for tf in ("5m", "15m", "1h"):
+    for tf in HTF_MAP.get(interval, []):
         df_tf = data_manager.cache.get(symbol, {}).get(tf)
         if df_tf is not None and not df_tf.empty:
             mtf_context[tf] = indicator_layer.apply_indicators_cached(df_tf, symbol, tf)
@@ -239,6 +250,7 @@ class TradeRequest(BaseModel):
     tp:       float
     sl:       float
     position: str
+    lot:      float = MIN_LOT
 
 
 class ManualTradeData(BaseModel):
@@ -246,6 +258,7 @@ class ManualTradeData(BaseModel):
     tp:       float
     sl:       float
     position: str
+    lot:      float = MIN_LOT
 
 
 @app.post("/trade/analyze")
@@ -255,9 +268,12 @@ async def get_trade_analysis(symbol: str, interval: str, body: TradeRequest):
         return {"error": "Engine not found", "rr": 0, "suggestions": [], "is_valid": False}
 
     current_inds = engine.ui_state.get('indicators', {})
+    structure    = engine.ui_state.get('structure', {})
     result = analyze_user_trade(
         entry=body.entry, tp=body.tp, sl=body.sl,
         position=body.position, current_indicators=current_inds,
+        lot=body.lot, symbol=symbol, capital=engine.manual_sim.capital,
+        structure=structure,
     )
     return result
 

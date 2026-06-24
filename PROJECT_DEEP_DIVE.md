@@ -1,7 +1,37 @@
 # PROJECT DEEP DIVE — Quant Trading Terminal
 
 > Tài liệu chi tiết toàn bộ cấu trúc, logic xử lý, và UI của hệ thống.  
-> Cập nhật: 2026-06-10 (pandas 3.x CoW fix + timestamp fix)
+> Cập nhật: 2026-06-24 (v5 — Top-Down MTF + Cấu trúc giá S/R/Pivot + Mô hình Lot/Margin kiểu Exness)
+
+---
+
+## 0. CẬP NHẬT LỚN v5 (2026-06-24)
+
+Đại tu lõi đọc thị trường để khắc phục win-rate thấp (~34.8% baseline) do 3 lỗi gốc:
+nhiễu MTF, thiếu S/R, phí ăn hết edge. Triết lý mới: **Top-Down 3 lớp**.
+
+**Lớp 1 — BIAS (cổng cứng, `htf_bias.py`):** Xác định xu hướng khung lớn theo
+`HTF_MAP` (vd 1m→[15m,1h], 1h→[4h,1d]). BULL→chỉ cho BUY; BEAR→chỉ SELL;
+NEUTRAL→đứng ngoài. Thay cho MTF "1/8 phiếu bầu" cũ.
+
+**Lớp 2 — STRUCTURE (`market_structure.py`):** Tính Hỗ trợ/Kháng cự (swing fractal),
+Pivot sàn (từ nến khung lớn), số tròn tâm lý. SL đặt sau mốc cấu trúc, TP tại mốc kế tiếp.
+
+**Lớp 3 — TRIGGER (confluence trong `signal_engine.py`):** Đếm yếu tố cùng hướng
+(EMA, MACD, momentum, volume, vị trí giá). Cần `MIN_CONFLUENCE` (3) + **R:R sau phí ≥
+`MIN_RR_AFTER_FEES` (1.5)** mới vào lệnh → ít lệnh, chất hơn. `reverse_mode` không còn
+dùng để đảo lệnh.
+
+**Mô hình LOT/Margin (`lot_sizing.py`)** thay sizing `risk_pct` cũ: lot bắt đầu 0.01,
+bot tự **scale lot động** theo confluence+bias (chặn bởi `RISK_CAP_PCT`), mô phỏng
+**margin + đòn bẩy (x100) + thanh lý** kiểu Exness. 1 lot = 1 coin (`CONTRACT_SIZE`).
+Áp dụng cho cả auto bot và lệnh tay.
+
+**Stream thêm 4h + 1d** (khung bối cảnh) để bias top-down đúng cho khung 15m/30m/1h.
+
+**UI:** thêm card "🧭 Phân tích quyết định" (bias từng khung, S/R, reasons[], R:R),
+hiển thị Lot/Margin/Equity/Margin level/Giá thanh lý, ô nhập lot cho lệnh tay, vẽ
+đường S/R/Pivot/Liquidation lên chart, tooltip giáo dục.
 
 ---
 
@@ -31,12 +61,16 @@ uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 Trading2/
 ├── main.py                  — FastAPI app, WebSocket server, REST endpoints
-├── config.py                — Constants: SYMBOLS, TIMEFRAMES, cache sizes
-├── data_layer.py            — Binance REST bootstrap + WebSocket stream + cache
+├── config.py                — Constants: SYMBOLS, TIMEFRAMES, HTF_MAP, lot/margin params
+├── data_layer.py            — Binance REST bootstrap + WebSocket stream + cache (gồm 4h/1d)
 ├── indicator_layer.py       — Tính toán 15+ indicator trên DataFrame
-├── signal_engine.py         — AdaptiveScorer + TradeSimulator + AdvancedSignalEngine
-├── simulator_manager.py     — ManualTradeSimulator (lệnh thủ công của user)
-├── ai_advisor.py            — Phân tích rule-based RR + entry quality
+├── market_structure.py      — [MỚI v5] S/R, pivot sàn, swing fractal, số tròn
+├── htf_bias.py              — [MỚI v5] Bias top-down khung lớn (compute/aggregate)
+├── lot_sizing.py            — [MỚI v5] Toán lot/margin/đòn bẩy/thanh lý kiểu Exness
+├── signal_engine.py         — AdaptiveScorer + TradeSimulator(lot) + AdvancedSignalEngine(top-down)
+├── simulator_manager.py     — ManualTradeSimulator (lệnh tay, lot/margin/thanh lý)
+├── prediction_engine.py     — PredictionEngine (range EMA-smoothed, hướng theo bias)
+├── ai_advisor.py            — Rule-based RR + entry quality + cảnh báo margin/S/R
 ├── static/index.html        — Toàn bộ frontend (single file)
 │
 ├── ml_training_data_*.jsonl — Log dự đoán + kết quả (1 dòng JSON/prediction)
@@ -55,14 +89,30 @@ Trading2/
 ## 3. CONFIG (config.py)
 
 ```python
-SYMBOLS        = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "PAXGUSDT"]
-TIMEFRAMES     = ["1m", "5m", "15m", "30m", "1h"]
-HISTORY_LIMIT  = 1000   # Số nến fetch khi bootstrap
-MAX_CACHE_SIZE = 1000   # Giữ tối đa 1000 nến trong RAM
-INDICATOR_WINDOW = 260  # Chỉ tính indicator trên 260 nến cuối (SMA200 cần 200+)
+SYMBOLS            = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "PAXGUSDT"]
+TIMEFRAMES         = ["1m", "5m", "15m", "30m", "1h"]   # khung GIAO DỊCH (có engine)
+CONTEXT_TIMEFRAMES = ["4h", "1d"]                        # khung BỐI CẢNH (chỉ bias)
+ALL_TIMEFRAMES     = TIMEFRAMES + CONTEXT_TIMEFRAMES     # tất cả khung stream
+HTF_MAP = {  # mỗi khung giao dịch → 2 khung lớn hơn làm bias top-down
+    "1m":["15m","1h"], "5m":["1h","4h"], "15m":["1h","4h"],
+    "30m":["4h","1d"], "1h":["4h","1d"],
+}
+MIN_RR_AFTER_FEES  = 1.5    # R:R tối thiểu sau phí mới vào lệnh
+MIN_CONFLUENCE     = 3      # số yếu tố tối thiểu cùng hướng
+STRUCTURE_LOOKBACK = 200; SWING_STRENGTH = 3
+HISTORY_LIMIT = 1000; MAX_CACHE_SIZE = 1000; INDICATOR_WINDOW = 260
+
+# --- Mô hình LOT/Margin (Exness) ---
+CONTRACT_SIZE = {"BTCUSDT":1.0, "ETHUSDT":1.0, "BNBUSDT":1.0, "PAXGUSDT":1.0}  # 1 lot=1 coin
+LEVERAGE = 100
+MIN_LOT=0.01; LOT_STEP=0.01; MAX_LOT=1.0
+LOT_BASE=0.01; LOT_MAX_DYNAMIC=0.10          # dải lot động của bot
+MAINTENANCE_MARGIN=0.005; STOP_OUT_LEVEL=0.50  # thanh lý khi margin level ≤ 50%
+RISK_CAP_PCT=0.03                              # trần rủi ro/lệnh chặn lot
 ```
 
-Tổng số engine được khởi tạo: 4 symbols × 5 timeframes = **20 engines**.
+Engine giao dịch: 4 symbols × 5 TIMEFRAMES = **20 engines**.
+Stream Binance: 4 × 7 (ALL_TIMEFRAMES) = **28 streams** (20 giao dịch + 8 bối cảnh 4h/1d).
 
 ---
 
@@ -112,6 +162,9 @@ Mỗi message WebSocket có 2 case:
 2. **Candle mới** (timestamp khác): `pd.concat([df.iloc[1:], new_row])` — bỏ nến đầu, thêm nến mới, giữ kích thước cố định 1000 nến
 
 Sau cả 2 case: gọi `on_tick_callback(sym, interval, is_closed, tick_data)`
+> [v5] Lời gọi callback được bọc try/except + log (`exc_info`). Một tick lỗi KHÔNG
+> làm sập `ws_loop` (trước đây sẽ bị hiểu nhầm là mất kết nối → reconnect 5s liên tục
+> → frontend đứng giá). Lỗi dữ liệu thật sẽ in `on_tick_callback error ...` ra console.
 
 `tick_data` dict được gửi lên WebSocket frontend:
 ```python
@@ -267,20 +320,21 @@ actual_entry = price * (1 + mult * SLIPPAGE)
 entry_fee = volume_usd * TAKER_FEE
 ```
 
-**TP/SL sizing từ actual_entry:**
-```python
-raw_sl  = atr * 1.5
-max_sl  = actual_entry * 0.0025
-min_sl  = actual_entry * 0.0005
-sl_dist = clamp(min_sl, raw_sl, max_sl)
-tp_dist = sl_dist * 1.8    # R:R = 1:1.8
-```
+**[v5] SL/TP truyền từ ngoài (theo CẤU TRÚC), không còn ATR thuần.**
+`generate_signal` tính `sl`/`tp` từ `market_structure` (SL sau hỗ trợ/kháng cự gần
+nhất, TP tại mốc kế tiếp) rồi truyền vào `open_position(..., sl, tp, confluence, bias_strength)`.
+Lệnh chỉ mở nếu **R:R sau phí ≥ MIN_RR_AFTER_FEES**.
 
-**Position sizing:**
+**[v5] Khối lượng theo LOT ĐỘNG (thay `risk_pct` cũ):**
 ```python
-pos_size   = (capital * risk_pct) / sl_dist   # risk_pct = 1.5%
-volume_usd = pos_size * actual_entry
+dyn_lot = lot_sizing.compute_dynamic_lot(confluence, bias_strength)  # 0.01..0.10
+cap_lot = lot_sizing.lot_from_risk_cap(capital, sl_dist, symbol, entry)  # trần rủi ro 3%
+lot     = min(dyn_lot, cap_lot)
+margin  = lot * contract * entry / LEVERAGE      # ký quỹ; bỏ lệnh nếu > vốn
+liq     = lot_sizing.liquidation_price(...)      # giá thanh lý
 ```
+`process_tick`: PnL = `pnl_usd` (lot-based) − phí 2 chiều; **kiểm tra THANH LÝ trước
+TP/SL** (giá chạm `liq_price` hoặc margin level ≤ 50% → đóng `LIQUIDATED`).
 
 **TP/SL hit check:**
 ```python
@@ -348,67 +402,40 @@ Nếu là nến mới:
 self.scorer.evaluate_and_learn(c_time, float(curr['close']))
 ```
 
-3b. **MTF Score** (5m, 15m, 1h):
+3b. **[v5] LỚP 1 — BIAS top-down (cổng cứng):**
 ```python
-for tf in ["5m", "15m", "1h"]:
-    w = 1.5 if adx > 25 else 1.0   # Trend market → higher weight
-    mtf_score += (1.0 if ema9 > ema21 else -1.0) * w
-mtf_score /= total_weight
+htf_tfs = HTF_MAP[interval]                      # vd 1m → ["15m","1h"]
+per_tf  = [htf_bias.compute_bias(mtf_context[tf]) for tf in htf_tfs]
+bias_agg = htf_bias.aggregate_bias(per_tf)       # BULL / BEAR / NEUTRAL + strength
+# BULL → allowed=["BUY"]; BEAR → ["SELL"]; NEUTRAL → [] (đứng ngoài)
+```
+`mtf_score` (cho breakdown/learning) = `bias_agg["score"]`. MTF không còn quyết định trực tiếp.
+
+3c. **[v5] LỚP 2 — CẤU TRÚC:** `structure = market_structure.analyze(df, pivot_src=khung lớn nhất)`
+→ `nearest_support`, `nearest_resistance`, pivots, distances.
+
+3d. **8 Signal Scores** vẫn được tính (cho UI breakdown + scorer learning) — công thức
+EMA/MACD/RSI/BB/VWAP/VOLUME/STOCH như cũ; MTF = `bias_agg.score`. `smoothed_score`
+chỉ dùng cho hiển thị, KHÔNG còn là ngưỡng vào lệnh.
+
+3e. **[v5] LỚP 3 — CONFLUENCE (`_confluence(side, ctx)`):** đếm yếu tố cùng hướng:
+trend nội khung (EMA stack + giá vs EMA50), MACD, momentum (RSI hồi/Stoch),
+volume xác nhận, **vị trí giá** (thưởng gần hỗ trợ cho BUY / kháng cự cho SELL;
+**phạt −1 nếu mua sát kháng cự / bán sát hỗ trợ**). Trả `(count, reasons[])`.
+
+3f. **Regime Detection:** (không đổi) SQUEEZE / TREND / RANGE / NEUTRAL.
+
+3g. **[v5] QUYẾT ĐỊNH (cổng bias + confluence + R:R):**
+```python
+# chỉ xét hướng allowed theo bias; cần confluence ≥ MIN_CONFLUENCE (3)
+sl, tp = _structure_sl_tp(side, price, atr, structure)   # SL sau S/R, TP tại mốc kế
+rr = _rr_after_fees(side, price, sl, tp)                  # đã trừ phí+slippage khứ hồi
+if rr < MIN_RR_AFTER_FEES:  bỏ lệnh (ghi reason)
+else: cần 2 nến confirm → trade_sim.open_position(side, price, sl, tp, confluence, bias_strength)
+# reverse_mode KHÔNG còn đảo lệnh. reasons[] mô tả từng yếu tố (giáo dục).
 ```
 
-3c. **8 Signal Scores** (mỗi cái trong [-1, +1]):
-
-| Signal | Logic |
-|--------|-------|
-| **EMA** | `ema_cross * (0.55 + abs(slope_norm) * 0.45)` — cross direction + slope momentum |
-| **MACD** | `macd_norm + macd_cross_bonus` — histogram normalized + fresh cross bonus ±0.5 |
-| **RSI** | `(rsi - 50) / 20` — linear: 50→0, 70→+1, 30→-1 |
-| **BB** | Nếu BB width < 0.2% → 0. Ngược lại: `(0.5 - band_position) * 2` — giá gần lower → bullish |
-| **VWAP** | `+1 nếu price > vwap, -1 nếu price < vwap` |
-| **VOLUME** | Chỉ tính khi `vol_ratio > 1.2`: directional surge `vol_dir * (vol_ratio - 1) * 0.8` |
-| **STOCH** | Zones: K<25 & D<25 → +0.8/+0.5; K>75 & D>75 → -0.8/-0.5; cross zones → ±0.45 |
-| **MTF** | Kết quả tổng hợp 3 timeframes từ bước 3b |
-
-3d. **Weighted score:**
-```python
-raw_score = sum(raw_sigs[k] * weights[k] for k in raw_sigs)
-smoothed_score = 0.35 * raw_score + 0.65 * smoothed_score   # EMA smoothing
-```
-Lý do EMA: tránh flip signal quá nhanh, cần 2+ bars confirm.
-
-3e. **Regime Detection:**
-```python
-if bb_width < 0.0025:             → "SQUEEZE"
-elif adx > 25 and |DI+-DI-| > 5: → "TREND"
-elif adx < 18:                    → "RANGE"
-else:                             → "NEUTRAL"
-```
-
-3f. **Adaptive Threshold:**
-```python
-base_thresh = 0.33 if regime == "TREND" else 0.40
-# Suy giảm dần nếu không có trade quá lâu (tối đa 0.12)
-decay = min(0.12, max(0, (hold_counter - 20) * 0.007))
-current_thresh = base_thresh - decay
-```
-
-3g. **Entry Decision** (cần 2 bars liên tiếp confirm):
-```python
-if bb_width > 0.001 and cooldown == 0:
-    if smoothed_score > thresh and rsi < 72:  dir_cand = "BUY"
-    elif smoothed_score < -thresh and rsi > 28: dir_cand = "SELL"
-    
-    if reverse_mode: flip BUY↔SELL
-    
-    if dir_cand == current_dir:  confirm_counter += 1
-    else:                        confirm_counter = 1; current_dir = dir_cand
-    
-    if confirm_counter >= 2:
-        action = dir_cand
-        trade_sim.open_position(...)
-```
-
-3h. **Prediction generation (EMA-smoothed via PredictionEngine):**
+3h. **Prediction generation (hướng theo BIAS):**
 ```python
 pe_dir = "BULL" if p_dir == "BULLISH" else "BEAR"
 pred_result = self.predictor.predict(
@@ -452,21 +479,18 @@ class ManualTradeSimulator:
     history: List[dict]         # 50 lệnh đã đóng gần nhất
 ```
 
+**[v5]** Khởi tạo với `symbol` + `capital`. PnL tính theo LOT (USD thực), có margin & thanh lý.
+
 **open_trade(trade_data):**
-- Nhận: `{entry, tp, sl, position: "LONG"/"SHORT"}`
-- Thêm `status="OPEN"`, `entry_time=now`
-- Push vào `active_trades`
+- Nhận: `{entry, tp, sl, position, lot}` (lot mặc định 0.01, step 0.01)
+- Tính `margin_usd`, `liq_price` (qua `lot_sizing`), lưu kèm `leverage`, `contract_size`, `notional`
+- Thêm `status="OPEN"`, `entry_time=now`; push vào `active_trades`
 
 **update_tick(current_price):**
-- Gọi mỗi tick từ `main.py`
-- Duyệt tất cả active_trades:
-  - `hit_tp = (LONG && price >= tp) || (SHORT && price <= tp)`
-  - `hit_sl = (LONG && price <= sl) || (SHORT && price >= sl)`
-  - Nếu hit: áp dụng exit slippage (`exit = price * (1 - mult * SLIPPAGE)`), tính PnL% net of round-trip fees
-  - PnL = `price_move_pct - TAKER_FEE * 2 * 100` (0.2% phí 2 chiều)
-  - Đưa vào history, loại khỏi active
-- **Trả về LIST tất cả trades đóng** trong tick này
-- `history` giữ tối đa 50 entries
+- Duyệt active_trades; live PnL = `lot_sizing.pnl_usd(...)` − phí 2 chiều (USD thực theo lot)
+- `hit_tp`/`hit_sl` như cũ + **`hit_liq`**: giá chạm `liq_price` hoặc `check_liquidation(equity, margin)`
+- result = `LIQUIDATED` (nếu cháy) / `WIN` / `LOSS`; exit có slippage; cập nhật `capital`
+- **Trả LIST tất cả trades đóng** trong tick; `history` giữ 50 entries
 
 ---
 
@@ -531,8 +555,8 @@ on_market_tick(symbol, interval, is_closed, tick_data)
    └─ broadcast MANUAL_TRADE_CLOSED nếu có
 2. data_manager.cache[symbol][interval] → df_raw
 3. indicator_layer.apply_indicators(df_raw) → df_ind (always fresh)
-4. Build mtf_context:
-   for tf in ("5m", "15m", "1h"):
+4. Build mtf_context theo HTF_MAP[interval] (top-down):
+   for tf in HTF_MAP[interval]:   # vd 1m→[15m,1h], 1h→[4h,1d]
        indicator_layer.apply_indicators_cached(df_tf, symbol, tf)
 5. engine.generate_signal(df_ind, mtf_context) → analysis
 6. Merge manual_active + manual_history
@@ -898,10 +922,12 @@ Ghi mỗi khi auto trade đóng (async via `run_in_executor`, non-blocking):
     "entry_price": 50000.0, "exit_price": 50090.0,
     "position": "LONG",
     "capital_before": 100.00, "capital_after": 100.24,
-    "risk_pct": 0.015, "position_size": 0.000012,
-    "profit_usd": 0.24, "pnl": 0.18, "result": "WIN"
+    "lot": 0.03, "leverage": 100, "contract_size": 1.0,
+    "margin_usd": 24.0, "liq_price": 49500.0,
+    "fees_usd": 0.12, "profit_usd": 0.24, "pnl": 1.0, "result": "WIN|LOSS|LIQUIDATED"
 }
 ```
+> [v5] `pnl` giờ là % trên MARGIN (đòn bẩy), không phải % giá. Thêm `lot/leverage/margin_usd/liq_price`.
 
 **Đọc lại khi khởi động:**
 - `AdaptiveScorer._load_history()`: 500 dòng cuối → replay weights + winrate

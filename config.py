@@ -1,5 +1,80 @@
+# config.py — Cấu hình toàn hệ thống
+# =====================================================================
+# Mọi hằng số cấu hình tập trung tại đây để dễ tinh chỉnh.
+
+# --- Symbols & khung giao dịch ---------------------------------------
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "PAXGUSDT"]
+
+# Khung GIAO DỊCH — mỗi khung có 1 engine ra lệnh riêng.
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h"]
-HISTORY_LIMIT = 1000       # Fetch last 1000 candles on bootstrap
-MAX_CACHE_SIZE = 1000      # Keep last 1000 candles in RAM
-INDICATOR_WINDOW = 260     # Compute indicators on last 260 rows (SMA200 needs 200+)
+
+# Khung BỐI CẢNH (context) — chỉ stream để làm "bias" top-down,
+# KHÔNG tạo engine giao dịch. Cần cho phân tích khung lớn của 15m/30m/1h.
+CONTEXT_TIMEFRAMES = ["4h", "1d"]
+
+# Tất cả khung cần fetch/stream từ Binance (giao dịch + bối cảnh).
+ALL_TIMEFRAMES = TIMEFRAMES + CONTEXT_TIMEFRAMES
+
+# --- Top-Down Multi-Timeframe ----------------------------------------
+# HTF_MAP: với mỗi khung giao dịch, danh sách 2 khung LỚN HƠN dùng để
+# xác định xu hướng chủ đạo (bias). Nguyên tắc trader: "chỉ giao dịch
+# THUẬN chiều khung lớn". Khung nhỏ chỉ để canh điểm vào (timing).
+HTF_MAP = {
+    "1m":  ["15m", "1h"],
+    "5m":  ["1h",  "4h"],
+    "15m": ["1h",  "4h"],
+    "30m": ["4h",  "1d"],
+    "1h":  ["4h",  "1d"],
+}
+
+# --- Bộ lọc chất lượng tín hiệu (ít lệnh hơn nhưng chất hơn) ----------
+MIN_RR_AFTER_FEES = 1.5   # R:R tối thiểu (sau phí) mới cho vào lệnh
+MIN_CONFLUENCE    = 3      # Số yếu tố tối thiểu cùng hướng (xem signal_engine)
+STRUCTURE_LOOKBACK = 200   # Số nến quét để tìm swing high/low (S/R)
+SWING_STRENGTH     = 3      # Fractal: 1 đỉnh/đáy phải cao/thấp hơn N nến 2 bên
+
+# --- Dữ liệu / cache -------------------------------------------------
+HISTORY_LIMIT  = 1000      # Số nến fetch khi bootstrap
+MAX_CACHE_SIZE = 1000      # Giữ tối đa 1000 nến trong RAM
+INDICATOR_WINDOW = 260     # Tính indicator trên 260 nến cuối (SMA200 cần 200+)
+
+# =====================================================================
+# MÔ HÌNH KHỐI LƯỢNG THEO LOT (kiểu sàn Exness)
+# =====================================================================
+# Lot là đơn vị khối lượng chuẩn của sàn CFD/forex.
+#   Khối lượng coin   = lot × CONTRACT_SIZE
+#   Giá trị hợp đồng  = lot × CONTRACT_SIZE × giá  (notional, tính bằng USDT)
+#   Ký quỹ (margin)   = notional / LEVERAGE
+# Ví dụ: BTC giá 80,000, lot 0.01, contract 1.0, đòn bẩy 100
+#   notional = 0.01 × 1 × 80,000 = 800$ ; margin = 800 / 100 = 8$.
+#   Giá chạy 1% (800$) → lãi/lỗ = 8$ (đòn bẩy khuếch đại theo margin).
+
+# 1 lot = bao nhiêu coin cơ sở. Exness crypto thường 1 lot = 1 coin.
+CONTRACT_SIZE = {
+    "BTCUSDT": 1.0,
+    "ETHUSDT": 1.0,
+    "BNBUSDT": 1.0,
+    "PAXGUSDT": 1.0,
+}
+DEFAULT_CONTRACT_SIZE = 1.0   # Dùng khi symbol không có trong map
+
+# Đòn bẩy mặc định (có thể nâng cấp per-symbol sau).
+LEVERAGE = 100
+
+# Giới hạn lot
+MIN_LOT  = 0.01   # Lot nhỏ nhất (micro lot)
+LOT_STEP = 0.01   # Bước nhảy lot
+MAX_LOT  = 1.0    # Trần an toàn tuyệt đối
+
+# Dải lot ĐỘNG cho bot tự động — scale theo độ mạnh tín hiệu.
+# Tín hiệu yếu → LOT_BASE; tín hiệu rất mạnh → LOT_MAX_DYNAMIC.
+LOT_BASE        = 0.01
+LOT_MAX_DYNAMIC = 0.10
+
+# --- Margin / thanh lý (liquidation) kiểu Exness ---------------------
+MAINTENANCE_MARGIN = 0.005   # 0.5% — ký quỹ duy trì tối thiểu
+STOP_OUT_LEVEL     = 0.50    # Margin level ≤ 50% → sàn tự thanh lý lệnh
+
+# Trần rủi ro mỗi lệnh: lot động vẫn bị chặn để khoảng lỗ tới SL
+# không vượt RISK_CAP_PCT × vốn (an toàn vốn).
+RISK_CAP_PCT = 0.03   # 3% vốn / lệnh

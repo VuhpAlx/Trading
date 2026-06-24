@@ -6,6 +6,11 @@
 1. **TRƯỚC khi sửa:** Đọc `PROJECT_DEEP_DIVE.md` để nắm context chính xác của phần sẽ chỉnh sửa.
 2. **SAU khi sửa:** Cập nhật `PROJECT_DEEP_DIVE.md` để phản ánh đúng trạng thái mới — section liên quan đến thay đổi vừa thực hiện.
 
+**Tự-động-hoá (đã setup trong `.claude/`):**
+- Command `/sync-trading-docs` (`.claude/commands/sync-trading-docs.md`): quy trình cập nhật `PROJECT_DEEP_DIVE.md` theo từng section sau khi sửa source. Chạy sau mỗi đợt thay đổi. (Tên riêng để không đụng command global `/sync-docs` của project khác.)
+- Hook `PreToolUse` → `.claude/hooks/pre_edit_doc_reminder.py`: nhắc đọc tài liệu lần đầu mỗi session khi sửa `.py`.
+- Hook `Stop` → `.claude/hooks/stop_sync_docs_reminder.py`: nhắc chạy `/sync-trading-docs` nếu có `.py` đổi mà tài liệu chưa cập nhật.
+
 ---
 
 ## Project Overview

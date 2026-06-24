@@ -6,7 +6,7 @@ import websockets
 import json
 import asyncio
 import logging
-from config import SYMBOLS, TIMEFRAMES, HISTORY_LIMIT, MAX_CACHE_SIZE
+from config import SYMBOLS, TIMEFRAMES, ALL_TIMEFRAMES, HISTORY_LIMIT, MAX_CACHE_SIZE
 
 logger = logging.getLogger("DataLayer")
 
@@ -42,17 +42,23 @@ class DataLayer:
             logger.error(f"Bootstrap error {symbol}/{interval}: {e}")
 
     async def bootstrap_all(self):
-        """Bootstrap all symbol/timeframe combinations concurrently."""
+        """Bootstrap all symbol/timeframe combinations concurrently.
+
+        Bao gồm cả khung GIAO DỊCH (TIMEFRAMES) và khung BỐI CẢNH
+        (CONTEXT_TIMEFRAMES = 4h, 1d) dùng cho phân tích bias top-down.
+        """
         tasks = [
             self.bootstrap(sym, tf)
             for sym in SYMBOLS
-            for tf in TIMEFRAMES
+            for tf in ALL_TIMEFRAMES
         ]
         await asyncio.gather(*tasks)
-        logger.info(f"Bootstrap complete: {len(SYMBOLS)} symbols × {len(TIMEFRAMES)} timeframes")
+        logger.info(f"Bootstrap complete: {len(SYMBOLS)} symbols × {len(ALL_TIMEFRAMES)} timeframes "
+                    f"(gồm {len(ALL_TIMEFRAMES) - len(TIMEFRAMES)} khung bối cảnh)")
 
     async def ws_loop(self):
-        streams = [f"{s.lower()}@kline_{t}" for s in SYMBOLS for t in TIMEFRAMES]
+        # Stream cả khung giao dịch lẫn khung bối cảnh (4h/1d) để cache bias luôn mới.
+        streams = [f"{s.lower()}@kline_{t}" for s in SYMBOLS for t in ALL_TIMEFRAMES]
         ws_url = f"wss://stream.binance.com:9443/stream?streams={'/'.join(streams)}"
         while True:
             try:
@@ -110,7 +116,13 @@ class DataLayer:
                 "low": float(k['l']),
                 "close": float(k['c']),
             }
-            await self.on_tick_callback(sym, interval, bool(k['x']), tick_data)
+            # Cô lập lỗi callback: một tick lỗi KHÔNG được làm sập vòng ws_loop
+            # (nếu lọt lên trên, ws_loop tưởng mất kết nối → reconnect liên tục →
+            #  frontend đứng giá). Bắt & log để chẩn đoán, rồi tiếp tục stream.
+            try:
+                await self.on_tick_callback(sym, interval, bool(k['x']), tick_data)
+            except Exception as e:
+                logger.error(f"on_tick_callback error {sym}/{interval}: {e}", exc_info=True)
 
 
 data_manager = DataLayer()
