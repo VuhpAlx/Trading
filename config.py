@@ -20,12 +20,39 @@ ALL_TIMEFRAMES = TIMEFRAMES + CONTEXT_TIMEFRAMES
 # xác định xu hướng chủ đạo (bias). Nguyên tắc trader: "chỉ giao dịch
 # THUẬN chiều khung lớn". Khung nhỏ chỉ để canh điểm vào (timing).
 HTF_MAP = {
-    "1m":  ["15m", "1h"],
-    "5m":  ["1h",  "4h"],
-    "15m": ["1h",  "4h"],
+    # v8: ĐƯA KHUNG NGÀY (1d) vào bias của MỌI khung giao dịch. Trước đây
+    # 1m/5m/15m không hề thấy 1d → bot mù xu hướng ngày. Nay mọi bot đều đọc
+    # 1 khung trung gian + 1d (xu hướng chủ đạo) theo nguyên tắc top-down.
+    "1m":  ["1h",  "1d"],
+    "5m":  ["4h",  "1d"],
+    "15m": ["4h",  "1d"],
     "30m": ["4h",  "1d"],
     "1h":  ["4h",  "1d"],
 }
+
+# =====================================================================
+# UNIFIED 1-BOT / 1-COIN (v8) — mỗi COIN chỉ MỘT auto-bot ra lệnh
+# =====================================================================
+# Trước v8: 1 engine cho MỖI (symbol × khung) = 20 bot, mỗi bot tự mở/đóng lệnh
+# độc lập → 1 coin bị xé thành 5 bot có thể vào NGƯỢC nhau. Mô hình ĐÚNG (đã
+# dùng trong backtest unified): mỗi coin = 1 trader, chốt lệnh ở 1 khung TRIGGER,
+# nhưng ĐỌC nhiều khung (bias top-down gồm 1d).
+#
+# Triển khai: vẫn giữ engine mỗi (symbol×khung) cho việc HIỂN THỊ/phân tích trên
+# chart, nhưng CHỈ engine ở khung trigger của coin được TỰ ĐỘNG VÀO LỆNH
+# (auto_trade_enabled=True). Các engine khung khác = chỉ hiển thị (không trade)
+# → mỗi coin chỉ còn 1 auto-bot thật sự.
+TRIGGER_TF_BY_SYMBOL = {
+    "PAXGUSDT": "1h",   # vàng: breakout swing đã kiểm chứng ở 1h
+    "BTCUSDT":  "1h",
+    "ETHUSDT":  "1h",
+    "BNBUSDT":  "1h",
+}
+DEFAULT_TRIGGER_TF = "1h"
+
+
+def trigger_tf_for(symbol: str) -> str:
+    return TRIGGER_TF_BY_SYMBOL.get(symbol, DEFAULT_TRIGGER_TF)
 
 # --- Bộ lọc chất lượng tín hiệu (ít lệnh hơn nhưng chất hơn) ----------
 MIN_RR_AFTER_FEES = 1.5   # R:R tối thiểu (sau phí) mới cho vào lệnh
@@ -41,7 +68,40 @@ SWING_STRENGTH     = 3      # Fractal: 1 đỉnh/đáy phải cao/thấp hơn N 
 # DƯƠNG. Symbol nằm trong set này dùng entry BREAKOUT thay cho confluence;
 # các symbol khác giữ nguyên logic cũ (bias + confluence + cấu trúc).
 # ⚠️ Khuyến nghị dùng ở khung 1h (đã kiểm chứng). Khung nhỏ hơn = nhiễu/phí.
-BREAKOUT_SYMBOLS    = {"PAXGUSDT"}
+# --- CHIẾN LƯỢC THEO LOẠI TÀI SẢN (v8) -------------------------------
+#   'breakout'   : phá kênh Donchian thuận trend khung lớn (trend-following).
+#   'confluence' : đa yếu tố hợp lưu (logic cũ — KHÔNG có edge đã kiểm chứng).
+#   'none'       : KHÔNG giao dịch theo hướng (đứng im — dùng cho stablecoin).
+# ⚠️ TRUNG THỰC (mục 18–25): TA đơn giản KHÔNG tạo edge dương bền cho crypto sau
+# phí. 'breakout' là alpha DUY NHẤT cho kỳ vọng dương — và CHỈ ở phí khứ hồi thấp
+# (≤~0.06%). Ở phí Exness Standard crypto (~0.11%) breakout_3R ≈ hòa→âm. Gán
+# 'breakout' cho crypto = lựa chọn "có cơ sở nhất", KHÔNG đảm bảo lãi; đổi sang
+# 'confluence'/'none' tuỳ ý — đây là cấu hình, không phải cam kết lợi nhuận.
+STRATEGY_BY_SYMBOL = {
+    "PAXGUSDT": "breakout",   # vàng: +95.7% trailing / +16.9% 3R (2 năm, phí thấp)
+    "BTCUSDT":  "breakout",
+    "ETHUSDT":  "breakout",
+    "BNBUSDT":  "breakout",
+}
+DEFAULT_STRATEGY = "confluence"
+
+# Gợi ý cho tài sản CHƯA có trong hệ thống (khi user thêm symbol sau):
+#   • Stablecoin / cặp quy đổi (USDCUSDT, FDUSDUSDT…): biên dao động < spread
+#     → KHÔNG ăn được hướng. Dùng 'none' (đứng ngoài). Mean-reversion/grid quanh
+#     mức neo chỉ có ý nghĩa nếu spread cực thấp — kỳ vọng ≈ phí.
+#   • FX majors (EURUSD, USDJPY…): spread Exness rất hẹp + trend + carry →
+#     'breakout' khung lớn (H4/D1) phù hợp, KHÔNG scalping khung nhỏ.
+STABLECOIN_HINT_SYMBOLS = {"USDCUSDT", "FDUSDUSDT", "TUSDUSDT", "USDPUSDT", "DAIUSDT"}
+
+
+def strategy_for(symbol: str) -> str:
+    """Chiến lược vào lệnh cho 1 symbol (mặc định confluence)."""
+    return STRATEGY_BY_SYMBOL.get(symbol, DEFAULT_STRATEGY)
+
+
+# BREAKOUT_SYMBOLS dẫn xuất từ STRATEGY_BY_SYMBOL (giữ tương thích import cũ ở
+# signal_engine: `symbol in BREAKOUT_SYMBOLS`).
+BREAKOUT_SYMBOLS    = {s for s, v in STRATEGY_BY_SYMBOL.items() if v == "breakout"}
 BREAKOUT_DONCHIAN_N = 20     # Số nến tính kênh giá (đỉnh/đáy) để xác định phá vỡ
 BREAKOUT_SL_ATR     = 1.5    # SL cách entry 1.5 × ATR
 BREAKOUT_RR         = 3.0    # TP = 3R (chốt xa, ôm trend — bù cho WR thấp)

@@ -12,6 +12,7 @@ import market_structure
 import htf_bias
 import lot_sizing
 from config import (
+    strategy_for,
     HTF_MAP, MIN_RR_AFTER_FEES, MIN_CONFLUENCE,
     STRUCTURE_LOOKBACK, SWING_STRENGTH, LEVERAGE,
     FORWARD_TEST_BARS, FORWARD_FLAT_ATR_MULT, FORWARD_TARGET_ATR_MULT,
@@ -557,10 +558,18 @@ class AdvancedSignalEngine:
         self.last_candle_time      = None
         self.hold_counter: int     = 0
 
+        # v8 — UNIFIED 1-bot/coin: chỉ engine ở khung TRIGGER của coin được tự
+        # động vào lệnh. Engine các khung khác = CHỈ HIỂN THỊ (phân tích/bias/
+        # cấu trúc vẫn tính, nhưng KHÔNG mở lệnh) → mỗi coin chỉ 1 auto-bot thật.
+        # main.py set lại cờ này sau khi khởi tạo theo TRIGGER_TF_BY_SYMBOL.
+        self.auto_trade_enabled: bool = True
+
         self.ui_state = {
             "action": "HOLD", "signal": "HOLD", "score": 0.0,
             "confidence": 0.0, "reason": "Initializing...",
             "regime": "NEUTRAL",
+            # Có ngay từ đầu để badge frontend #bot-scope đúng trước nến trigger đầu.
+            "auto_trade_enabled": self.auto_trade_enabled,
             "htf_bias": {"bias": "NEUTRAL", "strength": 0.0, "per_tf": []},
             "structure": {},
             "reasons": [],
@@ -771,13 +780,26 @@ class AdvancedSignalEngine:
             else:
                 allowed = []   # NEUTRAL: mặc định đứng ngoài
             req_conf = MIN_CONFLUENCE
-            # Chiến lược theo symbol: VÀNG (PAXG) dùng BREAKOUT; còn lại CONFLUENCE.
-            is_breakout = self.symbol in BREAKOUT_SYMBOLS
-            strat_name = "Breakout Swing (vàng)" if is_breakout else "Confluence MTF"
+            # Chiến lược theo LOẠI TÀI SẢN (config.STRATEGY_BY_SYMBOL):
+            #   'breakout'  → phá Donchian thuận trend; 'confluence' → đa yếu tố;
+            #   'none'      → KHÔNG giao dịch theo hướng (stablecoin/cặp quy đổi).
+            strat = strategy_for(self.symbol)
+            is_breakout = (strat == "breakout")
+            no_trade    = (strat == "none")
+            strat_name = {
+                "breakout":   "Breakout Swing",
+                "confluence": "Confluence MTF",
+                "none":       "Không giao dịch (cấu hình 'none')",
+            }.get(strat, "Confluence MTF")
+            # Nhãn rõ "vàng" chỉ cho tài sản kim loại quý (PAXG), không gán cho crypto.
+            if is_breakout and self.symbol == "PAXGUSDT":
+                strat_name = "Breakout Swing (vàng)"
 
             # Chọn ứng viên trong hướng được phép
             cand = None
-            if is_breakout:
+            if no_trade:
+                reasons.append("⏸️ Tài sản cấu hình 'none' — đứng ngoài, không giao dịch theo hướng")
+            elif is_breakout:
                 bo_side, _bo_str, bo_reasons = self._breakout_candidate(df, bias_dir, c_price)
                 if bo_side:
                     # conf giả định (≥4) để lot động hoạt động; RR gate vẫn áp dụng
@@ -839,7 +861,14 @@ class AdvancedSignalEngine:
                         self.current_dir = side
                         ready = False
 
-                    if ready:
+                    if ready and not self.auto_trade_enabled:
+                        # Khung CHỈ HIỂN THỊ — tín hiệu hợp lệ nhưng bot của coin
+                        # chốt lệnh ở khung TRIGGER (unified 1-bot/coin), không tự
+                        # đánh ở đây để tránh nhiều bot/coin vào ngược nhau.
+                        action = side
+                        reasons.append(f"📊 Tín hiệu {side} ({strat_name}) — khung hiển thị, "
+                                       f"bot coin vào lệnh ở khung trigger")
+                    elif ready:
                         opened = self.trade_sim.open_position(
                             c_time_str, side, c_price, sl, tp,
                             confluence=conf, bias_strength=bias_strength,
@@ -961,6 +990,7 @@ class AdvancedSignalEngine:
                 "tracker": combined_tracker,
                 "regime": regime,
                 "strategy": strat_name,
+                "auto_trade_enabled": self.auto_trade_enabled,
                 "breakout_plans": breakout_plans,
             })
             self.last_candle_time = c_time

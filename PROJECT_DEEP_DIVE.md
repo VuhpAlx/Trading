@@ -1,8 +1,8 @@
 # PROJECT DEEP DIVE — Quant Trading Terminal
 
 > Tài liệu chi tiết toàn bộ cấu trúc, logic xử lý, và UI của hệ thống.  
-> Cập nhật: 2026-06-25 (v6 — Backtest harness `backtest/` + nghiên cứu edge (mục 17–23);
-> fix sizing theo % rủi ro + Regime Badge 1d, mục 24)
+> Cập nhật: 2026-06-25 (v8 — UNIFIED 1-bot/coin + 1d vào bias mọi khung +
+> chiến lược theo loại tài sản + fix nhãn WR trailing trong backtest, mục 27)
 
 ---
 
@@ -1028,7 +1028,11 @@ data_layer.py
 
 ## 16. KEY DESIGN DECISIONS
 
-1. **20 independent engines** — mỗi symbol/TF có state riêng hoàn toàn. Không share learning giữa BTCUSDT_1m và BTCUSDT_5m.
+1. **20 engines hiển thị, chỉ 4 auto-bot (1/coin)** — [v8] vẫn tạo 1 engine cho
+   mỗi (symbol×khung) để vẽ/phân tích, NHƯNG chỉ engine ở khung TRIGGER của coin
+   (mặc định 1h) được tự động vào lệnh (`auto_trade_enabled`). Các khung khác chỉ
+   HIỂN THỊ. Xem mục 27. (Trước v8: cả 20 engine tự đánh độc lập → 1 coin bị xé
+   thành 5 bot vào ngược nhau — đã sửa.)
 
 2. **Score smoothing (EMA 0.35/0.65)** — bias mạnh về quá khứ để tránh flip-flop signal. Cần 2+ bars liên tiếp để confirm.
 
@@ -1398,3 +1402,70 @@ trend đảo), **trailing chỉ HIỂN THỊ tham khảo** để tự quyết tr
 - Frontend: card `#breakout-card` (🥇 Kế Hoạch Breakout) hiện 2 kế hoạch + trailing sống.
 - ⚠️ Lưu ý số liệu backtest: lãi đã trừ phí+slippage nhưng **CHƯA trừ swap** (phí qua đêm).
   Trailing ôm lệnh lâu → swap ảnh hưởng nhiều hơn. MaxDD = sụt giảm đỉnh-đáy lớn nhất (%).
+
+### 27. UNIFIED 1-BOT/COIN + 1d MỌI KHUNG + CHIẾN LƯỢC THEO TÀI SẢN (v8) [MỚI]
+
+Bối cảnh: user yêu cầu (1) mỗi coin chỉ MỘT auto-bot đọc dữ liệu nhiều khung (không
+xé thành nhiều bot/khung vào ngược nhau), (2) bổ sung khung NGÀY 1d vào bias, (3) gán
+chiến lược theo loại tài sản, (4) kiểm/tính lại backtest WR & lợi nhuận. Triển khai:
+
+**(1) UNIFIED 1-bot/coin — `config.py` + `main.py` + `signal_engine.py`:**
+- Vẫn tạo 1 engine cho mỗi (symbol×khung) để HIỂN THỊ/vẽ chart, nhưng thêm cờ
+  `AdvancedSignalEngine.auto_trade_enabled`. `main.py` set cờ này = True CHỈ cho engine
+  ở khung TRIGGER của coin (`config.TRIGGER_TF_BY_SYMBOL`, mặc định **1h**), False cho
+  các khung khác → **mỗi coin chỉ 1 auto-bot thật**. Engine hiển thị vẫn tính bias/cấu
+  trúc/dự đoán nhưng KHÔNG mở lệnh (reasons ghi "📊 khung hiển thị — bot vào lệnh ở trigger").
+- `config.trigger_tf_for(symbol)` + `main.coin_bot_snapshot(symbol)`: gắn `analysis
+  ["coin_bot"]` (trạng thái bot trigger) vào CẢ 2 nhánh broadcast để frontend hiển thị
+  "bot của coin" bất kể đang xem khung nào. `signal` thêm field `auto_trade_enabled`.
+- Frontend: badge `#bot-scope` trong card Auto Trade Bot — xanh "🤖 BOT THẬT (trigger 1h)"
+  nếu khung đang xem là trigger, vàng "📊 Khung hiển thị — bot chốt ở 1h" nếu không.
+- ⚠️ Hệ quả UX: xem khung KHÁC trigger (vd 1m) sẽ KHÔNG thấy auto-trade ở card đó (đúng
+  thiết kế — bot sống ở 1h). Badge + `coin_bot` giải thích điều này. Live UI CHƯA chạy
+  kiểm thực trong phiên (môi trường không có WS/browser) — đã smoke-test import + cờ.
+
+**(2) 1d vào bias MỌI khung — `config.HTF_MAP`:** trước đây 1m/5m/15m không hề thấy 1d.
+Nay mọi khung đều có 1d trong HTF_MAP (`1m→[1h,1d]`, `5m/15m/30m/1h→[4h,1d]`). Khung
+trigger 1h dùng bias [4h,1d] — KHỚP đúng cấu hình đã walk-forward (live = backtest).
+
+**(3) CHIẾN LƯỢC THEO TÀI SẢN — `config.STRATEGY_BY_SYMBOL` + `strategy_for()`:**
+- 'breakout' | 'confluence' | 'none'. `BREAKOUT_SYMBOLS` nay DẪN XUẤT từ map này.
+- `signal_engine.generate_signal` dùng `strat = strategy_for(symbol)`: 'breakout'→entry
+  breakout, 'confluence'→đa yếu tố, **'none'→đứng ngoài (cand=None, không mở lệnh)** — để
+  stablecoin/cặp quy đổi không bị giao dịch theo hướng. Nhãn `strat_name` chỉ ghi "(vàng)"
+  cho PAXG; crypto hiện "Breakout Swing" (không gắn nhãn vàng sai).
+- Gán: PAXG/BTC/ETH/BNB = 'breakout' (alpha DUY NHẤT dương sau phí). Stablecoin/cặp quy
+  đổi → gợi ý 'none' (biên < spread); FX majors → 'breakout' H4/D1. `STABLECOIN_HINT_SYMBOLS`
+  ghi sẵn gợi ý cho symbol thêm sau.
+- ⚠️ TRUNG THỰC: gán breakout cho crypto KHÔNG đảm bảo lãi — ở phí Standard (~0.11%)
+  breakout_3R ≈ hòa→âm (xem bảng độ nhạy phí). Đây là cấu hình reversible, không phải
+  cam kết lợi nhuận. Vàng là nơi breakout thực sự thắng (phí thấp).
+
+**(4) FIX BACKTEST + TÍNH LẠI — `backtest/strategy_lab.py`:**
+- **Fix nhãn WR cho trailing:** `run_strategy` phân loại WIN/LOSS theo **vốn thực
+  tăng/giảm** (so `cap_curve[-1]`), KHÔNG theo nhãn SL/TP của `process_tick`. Trước đây
+  trailing thoát bằng SL-đã-dời-lên-lãi → bị gán "LOSS" → **WR=0% giả** dù vốn tăng. Nay
+  breakout_trail có WR THẬT ~26–32%.
+- **Fix fee-sweep bị vô hiệu (regression v7):** từ v7, `TradeSimulator.__init__` set
+  `self.TAKER_FEE` theo symbol → CHE giá trị class-level mà `--cost`/`COSTS` patch → bảng
+  độ nhạy phí bị **phẳng**. `run_strategy` nay ghi đè `sim.TAKER_FEE/SLIPPAGE` về class-level
+  → `--cost` & fee-sweep hoạt động lại (uniform cost, so sánh được số cũ).
+
+**KẾT QUẢ TÍNH LẠI (1h, ~2 năm, bias 4h/1d, vốn $100/coin) — có dùng đa khung? CÓ
+(trigger 1h + bias gộp 4h/1d). Số liệu KHỚP bản cũ (chỉ sửa báo cáo, không đổi giao dịch):**
+
+| (phí 0.06% uniform) | Trades | WR% | avg R | MaxDD% | Ret%TB/coin |
+|---|---|---|---|---|---|
+| breakout_3R    | 1133 | 29.1 | +0.068 | 23.8 | **+16.9** |
+| pullback_trend |   98 | 46.9 | +0.099 |  5.7 | +2.0 |
+| pullback_regime|   71 | 35.2 | −0.014 |  7.3 | −0.5 |
+
+Độ nhạy phí breakout_3R: **0.03%→+32.8% · 0.06%→+16.9% · 0.10%→−0.8%** (sống nhờ phí thấp).
+Per-coin breakout_3R @0.06%: BTC −6.5%, ETH +16.6%, BNB +9.6%, **PAXG +48.0%** (PAXG ở phí
+THẬT 0.03% ≈ **+97.6%**). breakout_trail (WR đã sửa) PAXG +49.5%/@0.06% (~+95.7%/@0.03%).
+
+**Kết luận không đổi (nhất quán mục 18–26):** edge thực chỉ ở **breakout trên VÀNG, phí
+thấp**. Crypto breakout dương ở phí ≤0.06% nhưng **âm ở phí Standard 0.10%+** và lumpy
+(GO/NO-GO vẫn ❌). Unified-1-bot/coin + 1d + per-asset là **kiến trúc đúng & trung thực
+hơn**, KHÔNG tạo thêm alpha. `pullback_regime` vẫn NO-GO. Định vị: trợ lý phân tích/paper-
+trade, không phải máy in tiền.

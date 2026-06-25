@@ -14,7 +14,7 @@ from ai_advisor import analyze_user_trade
 from data_layer import data_manager
 from indicator_layer import IndicatorLayer
 from signal_engine import AdvancedSignalEngine
-from config import SYMBOLS, TIMEFRAMES, HTF_MAP, MIN_LOT
+from config import SYMBOLS, TIMEFRAMES, HTF_MAP, MIN_LOT, trigger_tf_for
 import lot_sizing
 
 logging.basicConfig(level=logging.INFO)
@@ -23,12 +23,49 @@ logger = logging.getLogger("MainApp")
 # Shared indicator layer (cached per symbol/interval)
 indicator_layer = IndicatorLayer()
 
-# One engine per symbol/timeframe combination
+# One engine per symbol/timeframe combination (cho hiển thị mọi khung)
 engines = {
     f"{sym}_{tf}": AdvancedSignalEngine(sym, tf)
     for sym in SYMBOLS
     for tf in TIMEFRAMES
 }
+
+# v8 UNIFIED 1-bot/coin: CHỈ engine ở khung TRIGGER của mỗi coin được phép tự
+# động vào lệnh; các khung còn lại chỉ HIỂN THỊ (auto_trade_enabled=False) →
+# mỗi coin chỉ còn 1 auto-bot, đọc bias top-down gồm 1d (qua HTF_MAP).
+for _sym in SYMBOLS:
+    _trig = trigger_tf_for(_sym)
+    for _tf in TIMEFRAMES:
+        _eng = engines.get(f"{_sym}_{_tf}")
+        if _eng is not None:
+            _eng.auto_trade_enabled = (_tf == _trig)
+logger.info(
+    "[UNIFIED] Auto-bot bật ở khung trigger mỗi coin: "
+    + ", ".join(f"{s}@{trigger_tf_for(s)}" for s in SYMBOLS)
+)
+
+
+def coin_bot_snapshot(symbol: str) -> dict:
+    """Trạng thái auto-bot THẬT của coin (engine khung trigger) — để frontend
+    hiển thị 'bot của coin' bất kể đang xem khung nào."""
+    trig = trigger_tf_for(symbol)
+    eng = engines.get(f"{symbol}_{trig}")
+    if eng is None:
+        return {"trigger_tf": trig, "position_status": "NONE"}
+    t = eng.trade_sim.trade
+    is_open = eng.trade_sim.state != "NONE"
+    return {
+        "trigger_tf": trig,
+        "strategy": eng.ui_state.get("strategy"),
+        "action": eng.ui_state.get("action", "HOLD"),
+        "position_status": "OPEN" if is_open else "NONE",
+        "entry":      round(t.get("entry", 0.0), 4) if is_open else None,
+        "tp":         round(t.get("tp", 0.0), 4) if is_open else None,
+        "sl":         round(t.get("sl", 0.0), 4) if is_open else None,
+        "pnl":        round(t.get("pnl_pct", 0.0), 2) if is_open else 0.0,
+        "profit_usd": round(t.get("profit_usd", 0.0), 2) if is_open else 0.0,
+        "capital":    round(eng.trade_sim.capital, 2),
+    }
 
 
 # ==========================================
@@ -117,6 +154,7 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
         analysis["manual_active"]  = engine.manual_sim.active_trades
         analysis["manual_history"] = engine.manual_sim.history
         analysis["regime_1d"]      = compute_regime_1d(symbol)
+        analysis["coin_bot"]       = coin_bot_snapshot(symbol)
 
         # Trade dict was updated by process_tick above (pnl_pct/profit_usd already fresh)
         t     = engine.trade_sim.trade
@@ -165,6 +203,7 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
     analysis["manual_active"]  = engine.manual_sim.active_trades
     analysis["manual_history"] = engine.manual_sim.history
     analysis["regime_1d"]      = compute_regime_1d(symbol)
+    analysis["coin_bot"]       = coin_bot_snapshot(symbol)
 
     await connection_manager.broadcast_to_symbol(
         json.dumps({"type": "TICK", "symbol": symbol, "candle": tick_data, "signal": analysis}),

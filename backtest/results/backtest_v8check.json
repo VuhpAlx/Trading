@@ -1,0 +1,34 @@
+{
+  "results": [
+    {
+      "pred_total": 17935,
+      "pred_win": 7532,
+      "pred_loss": 7787,
+      "pred_flat": 2616,
+      "pred_winrate": 49.2,
+      "trades_total": 7,
+      "trade_win": 2,
+      "trade_loss": 5,
+      "trade_liquidated": 0,
+      "trade_winrate": 28.6,
+      "pnl_usd_sum": -3.6,
+      "max_drawdown_pct": 7.39,
+      "symbol": "BTCUSDT",
+      "timeframe": "1h",
+      "candles_total": 18240,
+      "candles_evaluated": 17940,
+      "eval_from": "2024-06-07 15:00:00+00:00",
+      "eval_to": "2026-06-25 02:00:00+00:00",
+      "actions": {
+        "BUY": 6,
+        "SELL": 1,
+        "HOLD": 17933
+      },
+      "final_capital": 96.41,
+      "return_pct": -3.59,
+      "errors": 0,
+      "seconds": 127.5
+    }
+  ],
+  "elapsed_sec": 127.5
+}

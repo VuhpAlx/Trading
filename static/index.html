@@ -284,6 +284,8 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
   <!-- Auto Trade -->
   <div class="card" style="border-color:#FCD535">
     <h3 style="color:#FCD535">🤖 Auto Trade Bot</h3>
+    <div id="bot-scope" title="UNIFIED: mỗi coin chỉ 1 auto-bot, chốt lệnh ở khung trigger. Các khung khác chỉ hiển thị phân tích."
+         style="margin-bottom:6px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;background:#2a2e39;color:#848E9C">---</div>
     <div class="info-row">
       <span class="lbl">Capital</span>
       <strong id="trade-capital" class="gold" style="font-size:14px">---</strong>
@@ -686,6 +688,22 @@ function renderTick(res) {
     r1Badge.textContent = txt;
     r1Badge.style.color = fg;
     r1Badge.style.background = bg;
+  }
+
+  // v8 UNIFIED — phạm vi bot: khung đang xem có phải bot thật của coin không
+  const bs = document.getElementById('bot-scope');
+  if (bs) {
+    const cb = p.coin_bot || {};
+    const trig = cb.trigger_tf || '?';
+    if (p.auto_trade_enabled) {
+      bs.textContent = `🤖 BOT THẬT của coin (khung trigger ${trig})`;
+      bs.style.color = '#0ECB81'; bs.style.background = '#0c2a1f';
+    } else {
+      const pos = cb.position_status === 'OPEN'
+        ? ` — bot đang ${cb.action||''} @${trig}` : '';
+      bs.textContent = `📊 Khung hiển thị — bot coin chốt ở ${trig}${pos}`;
+      bs.style.color = '#F0B90B'; bs.style.background = '#2e2410';
+    }
   }
 
   // Action badge

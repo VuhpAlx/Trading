@@ -144,6 +144,13 @@ def run_strategy(symbol, cfg, data, SimCls) -> dict:
 
     sim = SimCls(symbol, TRIGGER, capital=100.0)
     sim.trade_log_file = f"lab_{symbol}.jsonl"   # cô lập, không đụng file thật
+    # v8 FIX: harness sweep phí qua CLASS-level TAKER_FEE (strategy_lab --cost /
+    # walkforward COSTS). Nhưng từ v7, TradeSimulator.__init__ set self.TAKER_FEE
+    # THEO SYMBOL → CHE giá trị class-level → --cost & fee-sweep MẤT tác dụng
+    # (bảng độ nhạy phí phẳng). Ghi đè instance về class-level để áp đúng phí đồng
+    # nhất đang sweep (kết quả lại so sánh được với số liệu cũ — uniform cost).
+    sim.TAKER_FEE = SimCls.TAKER_FEE
+    sim.SLIPPAGE = SimCls.SLIPPAGE
 
     n = len(ind)
     N = cfg.get("n", 20)
@@ -176,12 +183,19 @@ def run_strategy(symbol, cfg, data, SimCls) -> dict:
                     t["sl"] = min(t["sl"], c_close + cfg["trail_atr"] * atr)
             closed = sim.process_tick(c_close, c_high, c_low)
             if closed:
-                r = closed["result"]
-                if r == "WIN": wins += 1
-                elif r == "LOSS": losses += 1
-                else: liq += 1
+                # Phân loại theo VỐN THỰC (lãi/lỗ ròng sau phí), KHÔNG theo nhãn
+                # SL/TP của process_tick. Lý do: chiến lược trailing thoát bằng SL
+                # đã dời lên vùng có lãi → process_tick gán "LOSS" dù vốn TĂNG
+                # (artifact khiến WR=0%). So vốn trước/sau cho WR đúng mọi tp mode.
+                cap_before = cap_curve[-1]
+                if closed["result"] == "LIQUIDATED":
+                    liq += 1; eff = "LIQ"
+                elif sim.capital > cap_before:
+                    wins += 1; eff = "WIN"
+                else:
+                    losses += 1; eff = "LOSS"
                 cap_curve.append(sim.capital)
-                trade_log.append((str(row["timestamp"]), round(sim.capital, 4), r))
+                trade_log.append((str(row["timestamp"]), round(sim.capital, 4), eff))
                 break
 
         # --- xét vào lệnh mới khi đang rảnh ---
