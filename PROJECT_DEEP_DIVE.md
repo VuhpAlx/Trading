@@ -1,7 +1,8 @@
 # PROJECT DEEP DIVE — Quant Trading Terminal
 
 > Tài liệu chi tiết toàn bộ cấu trúc, logic xử lý, và UI của hệ thống.  
-> Cập nhật: 2026-06-24 (v5 — Top-Down MTF + Cấu trúc giá S/R/Pivot + Mô hình Lot/Margin kiểu Exness)
+> Cập nhật: 2026-06-25 (v6 — Backtest harness `backtest/` + nghiên cứu edge (mục 17–23);
+> fix sizing theo % rủi ro + Regime Badge 1d, mục 24)
 
 ---
 
@@ -242,14 +243,13 @@ total = sum(weights.values())
 return {k: round(v / total, 4) for k, v in weights.items()}
 ```
 
-#### Load history từ JSONL
+#### Load history từ JSONL — [v5.1] chỉ LIFETIME, không đổ vào tracker
 
 Khi khởi tạo, đọc **500 dòng cuối** của `ml_training_data_{symbol}_{tf}.jsonl`:
-- Mỗi dòng: parse result (WIN/LOSS/PARTIAL), raw_signals, direction
-- Gọi `_apply_result_to_stats()` để build running stats
-- Gọi `_adjust_weights()` với `lr=0.01` (thấp hơn live: 0.05) để replay học nhẹ
-- Build `recent_results` list (15 entries hiển thị trên tracker)
-- Tính lại `ema_winrate` và kiểm tra `reverse_mode`
+- **Tương thích 2 schema**: `result`|`final_result`, `prediction.direction`|`predict_direction`.
+- Gọi `_apply_result_to_stats()` (LIFETIME) + `_adjust_weights()` (lr=0.01) replay nhẹ.
+- **KHÔNG** điền `recent_results` → tracker Forward Testing chỉ hiển thị **phiên hiện tại**
+  (tránh lẫn dữ liệu nhiều ngày). `recent_results` bắt đầu rỗng mỗi phiên.
 
 #### _adjust_weights logic
 
@@ -261,25 +261,25 @@ for ind, val in raw_sigs.items():
     weights[ind] = clamp(0.2, 3.0)
 ```
 
-`factor` = `{"WIN": 1.0, "PARTIAL": 0.2, "LOSS": -0.8}`
+`factor` = `{"WIN": 1.0, "FLAT": 0.0, "LOSS": -0.8}` (PARTIAL: legacy)
 
-#### Prediction evaluation (Batch Learning)
+#### Prediction evaluation — [v5.1] ĐÚNG HƯỚNG + ngưỡng (Forward Testing)
 
 `register_prediction(target_time, payload)`:
-- target_time = `c_time + tf_seconds * 5` (ví dụ 1m: cộng thêm 5 phút)
-- Lưu vào `pending_predictions[target_time]`
+- target_time = `c_time + tf_seconds * FORWARD_TEST_BARS` (mặc định 5 nến).
+- payload gồm `start_price`, `atr_snapshot`, `target`, `target_zone`, `direction`...
 
 `evaluate_and_learn(current_time_sec, current_close)`:
-- Scan tất cả pending predictions có `target_time <= current_time`
-- So sánh `current_close` với range min/max và direction
-- **WIN**: đúng hướng VÀ trong range
-- **PARTIAL**: đúng hướng nhưng ngoài range
-- **LOSS**: sai hướng
-- **Không** gọi `_adjust_weights()` ngay — push vào `_learning_buffer` (list of tuples)
-- Update `ema_winrate` (alpha=0.15) ngay — đây chỉ là display, không cần batch
-- Ghi vào JSONL log
-- **Khi `len(_learning_buffer) >= 20`**: gọi `_adjust_weights()` cho toàn bộ buffer rồi clear
-- Lý do batch: tránh overfit noise 1 phút; weights chỉ thay đổi sau khi có đủ trend signal
+- Scan pending có `target_time <= current_time`. `move = current_close - start_price`;
+  ngưỡng `thr = atr_snapshot × FORWARD_FLAT_ATR_MULT` (0.2×ATR).
+- **WIN**: đi đúng hướng ≥ thr · **LOSS**: đi ngược ≥ thr · **FLAT**: |move| < thr (đi ngang, KHÔNG tính hit-rate).
+- Bỏ `hit_range` làm cổng WIN (chỉ log tham khảo) → hết WIN-giả do dải EMA rộng.
+- Cập nhật `session_stats` (phiên) + `stats` (lifetime). `recent_results` lưu **epoch `ts`** + `target`.
+- Buffer learning, batch `_adjust_weights()` mỗi 20 (tránh overfit nhiễu).
+
+#### Session vs Lifetime hit-rate
+- `get_session_winrate()` = WIN/(WIN+LOSS) **phiên hiện tại** → hiển thị ở card Forward Testing.
+- `get_winrate()` = hit-rate **lifetime** (cả lịch sử) → card Signal Engine.
 
 #### EMA Winrate
 
@@ -442,12 +442,12 @@ pred_result = self.predictor.predict(
     close_price, ema9, atr, bb_upper, bb_lower,
     momentum_score=smoothed_score, direction=pe_dir
 )
-# PredictionEngine dùng EMA smoothing cho mid_price và range_width
-# BB-adjusted width: max(atr*1.2, bb_width*0.35)
-# Momentum factor: 1 + (|score| * 0.25) — range rộng hơn khi signal mạnh
-# Max width cap: 2% của price (tránh range không thực tế)
-# Register để evaluate sau (tf_seconds * 5 giây)
-scorer.register_prediction(c_time + tf_secs * 5, {...})
+# [v5.1] confidence tính lại trong engine: 0.30 + 0.40*bias_strength
+#        + 0.15*(confluence/6) + 0.15*min(1,adx/30)  (thay công thức ATR cũ ~0.94)
+# target = giá ± FORWARD_TARGET_ATR_MULT*ATR (0.6×ATR); target_zone = target ± 0.2×ATR
+# Register để evaluate sau FORWARD_TEST_BARS nến:
+scorer.register_prediction(c_time + tf_secs * FORWARD_TEST_BARS,
+    {..., "target": target, "target_zone": zone, "start_price": c_price, "atr_snapshot": atr})
 ```
 
 3i. **Update ui_state** và lưu `last_candle_time = c_time`
@@ -807,9 +807,12 @@ function setStyle(id, prop, val) { ... }
 - Closed trades: màu theo result
 - 6 cột: Time | Pos | Entry | TP/SL | PnL | Result
 
-#### Card 11: Forward Testing Tracker
-- Prediction tracker: pending (WAITING cam) + recent results (WIN xanh / LOSS đỏ)
-- 5 cột: Time | Dir | Range | Actual | Result
+#### Card 11: Forward Testing Tracker — [v5.1]
+- Header **hit-rate phiên**: `{W}/{W+L} ({%}) · FLAT {n}` (từ `session_winrate`/`session_stats`).
+- Chỉ hiển thị dự đoán **phiên hiện tại**; mỗi dòng có **NGÀY+giờ** (`MM-DD HH:MM`, format từ epoch `ts`).
+- 5 cột: Thời gian(ngày+giờ) | Hướng | Target | Thực tế | KQ (WIN xanh/LOSS đỏ/FLAT xám/WAITING cam).
+- Sort theo `ts` (epoch số) — không vỡ thứ tự khi qua ngày.
+- Chart: **vùng target dự kiến** (1 đường target + 2 đường mờ zone) thay đường chéo `predSeries` cũ.
 
 ### 10.7 Toast Notifications
 
@@ -896,21 +899,26 @@ on_market_tick(symbol, interval, is_closed, tick_data)
 
 ## 12. PERSISTENCE (File I/O)
 
-### ml_training_data_{SYMBOL}_{TF}.jsonl
+### ml_training_data_{SYMBOL}_{TF}.jsonl — [v5.1]
 
 Ghi mỗi khi prediction được evaluate (async via `run_in_executor`, non-blocking):
 ```json
 {
-    "time": "2026-06-10T12:34:56",
+    "time": "2026-06-24T12:34:56", "ts": 1782304496,
     "symbol": "BTCUSDT", "timeframe": "1m",
-    "prediction": {"direction": "BULLISH", "range": {"min": 49800, "max": 50200}, "confidence": 0.75},
+    "prediction": {"direction": "BULLISH", "target": 50180.0,
+                   "range": {"min": 49800, "max": 50200}, "confidence": 0.72},
     "signal": "BUY", "score": 0.42,
     "raw_signals": {"EMA": 0.7, "MACD": -0.2, ...},
     "indicators_snapshot": {"EMA_9": 50100, "RSI": 58.3, ...},
-    "actual_price": 50150.0,
+    "start_price": 50000.0, "actual_price": 50150.0,
+    "threshold": 30.0, "hit_range": true,
     "result": "WIN"
 }
 ```
+> [v5.1] Thêm `ts` (epoch), `prediction.target`, `start_price`, `threshold`, `hit_range`.
+> `result` ∈ {WIN, LOSS, **FLAT**}. Tiêu chí: đúng hướng ≥ `threshold` (=0.2×ATR) → WIN.
+> File schema CŨ (trước v5.1) đã được archive thành `*.jsonl.old` (forward-test tính lại sạch).
 
 ### trade_history_{SYMBOL}_{TF}.jsonl
 
@@ -1033,3 +1041,280 @@ data_layer.py
 6. **Single-file frontend** — không build step, không dependency. Open browser → chạy ngay.
 
 7. **RAF + DOM diff** — tránh 60 DOM rebuilds/minute. Chỉ cập nhật khi value thực sự thay đổi.
+
+---
+
+## 17. BACKTEST HARNESS (backtest/) — [MỚI]
+
+Mục tiêu: đo win-rate & đầu ra của logic hiện tại trên dữ liệu lịch sử thay vì
+chờ stream live. **Tái dùng CHÍNH `AdvancedSignalEngine` + `TradeSimulator`** (không
+viết lại logic) → kết quả phản ánh đúng logic production.
+
+### File
+```
+backtest/
+├── fetch_data.py   — Tải klines Binance (phân trang 1000), cache .pkl ở scratchpad
+├── backtest.py     — Replay nến qua engine; tổng hợp metric; ghi results/*.json
+├── diagnose.py     — Đếm "phễu" quyết định (bias/confluence/RR) để biết gate nào chặn
+└── results/        — backtest_<tag>.json + run_<tag>.log (deliverable, trong repo)
+```
+
+### Cơ chế khớp live (backtest.py)
+- **Thứ tự mỗi nến đóng** y như `main.on_market_tick`: `trade_sim.process_tick(close,
+  high,low)` TRƯỚC (gọi 2 lần để "tiêu" cờ `just_opened` của lệnh mở nến trước, khớp
+  hành vi intra-candle live) → rồi `generate_signal(df_win, mtf_context)`.
+- **Cô lập I/O**: `chdir` vào RUN_DIR tạm; mọi `ml_training_data_*`/`trade_history_*`
+  ghi ở đó, KHÔNG đụng file live. Weights khởi tạo MẶC ĐỊNH (reproducible).
+- **Chống lookahead MTF**: bias khung lớn chỉ dùng nến HTF **đã đóng** tại thời điểm
+  nến giao dịch đóng (`searchsorted` trên close-time HTF). Live thấy nến HTF đang
+  hình thành — backtest không được phép.
+- **Tốc độ**: indicator precompute **vectorized 1 lần/khung** (`compute_indicators_full`,
+  bỏ `tail(260)`) rồi slice cửa sổ WINDOW=320. VWAP anchored theo ngày — lệch nhẹ so
+  với live (chỉ ảnh hưởng vwap_score hiển thị/learning, KHÔNG ảnh hưởng quyết định).
+
+### Cấu hình mặc định
+- `EVAL_DAYS=90` (~3 tháng), `WARMUP_BARS=300` (không tính metric), `WINDOW=320`.
+- `FETCH_DAYS`: khung giao dịch ~95d; 4h=220d, 1d=420d (đủ SMA200 cho bias từ đầu).
+
+### Metric xuất ra mỗi (symbol, TF)
+- **Forward-test (hướng):** pred_win/loss/flat, pred_winrate = WIN/(WIN+LOSS).
+- **Trade (auto bot):** trades_total, trade_winrate, liquidated, final_capital, return_pct, max_drawdown_pct.
+- **Phân bố action:** BUY/SELL/HOLD.
+
+### ⚠️ BUG đã gặp khi dựng (đã fix)
+`_ms()` ban đầu chia `asi8 // 1_000_000`. Nhưng pandas 3.x giữ dtype `datetime64[ms,UTC]`
+nên `.asi8` ĐÃ là mili-giây → chia thêm làm sai đơn vị → `searchsorted` luôn trả 0 →
+**mtf_context rỗng → bias NEUTRAL 100% → 0 lệnh**. Fix: `as_unit("ms").asi8` (ép ms mọi
+version, không chia). Bài học: cùng lỗi class với BUG-012 (pandas 3.x resolution = ms).
+
+### Lệnh chạy
+```
+python backtest/backtest.py --tfs 5m,15m,30m,1h --tag fast
+python backtest/backtest.py --tfs 1m --tag 1m          # nặng (~chục phút)
+python backtest/diagnose.py BTCUSDT 1h                  # phễu quyết định
+python backtest/backtest_symbol.py --trigger 15m --bias 1h,4h,1d --min-conf 2 --min-rr 1.5
+```
+
+### backtest_symbol.py — UNIFIED 1 trader / 1 coin [MỚI]
+Sửa lỗi thiết kế "20 engine độc lập cùng trade": mỗi SYMBOL chỉ 1 engine ở khung
+TRIGGER (15m), bias gộp 1h/4h/1d, 1 vị thế/coin. Tái dùng nguyên `generate_signal`,
+chỉ nối lại mtf_context + monkeypatch CÔ LẬP `MIN_CONFLUENCE`/`MIN_RR_AFTER_FEES`/
+`HTF_MAP[trigger]` trong process backtest (KHÔNG đụng config/live).
+
+### 📊 KẾT QUẢ BACKTEST 3 THÁNG (21/03–24/06/2026, vốn $100/đơn vị)
+
+**Baseline (per-TF, 20 engine — logic gốc):** Mọi khung 1m cháy nặng
+(BTC −95.7%, PAXG −72.9%, ETH −43.5%, BNB −10.4%). 5m: BTC −41%, PAXG −33%.
+30m/1h gần hòa vốn NHƯNG chỉ vì gần như không vào lệnh (1–9 lệnh/3 tháng).
+
+**Unified per-symbol (sweep nhiều cấu hình):**
+
+| Cấu hình | BTC | ETH | BNB | PAXG |
+|---|---|---|---|---|
+| 15m c2 rr1.5 | $35.7 (−64%) | $100.3 | $100.1 | $88.0 |
+| 15m c2 rr1.0 | $40.2 (−60%) | $100.7 | $97.9 | $88.5 |
+| 30m c2 rr1.5 | $92.7 | **$106.1 (+6%)** | $99.9 | $92.8 |
+| 15m c3 rr2.5 | $100 (0 lệnh) | $98.5 | $100 | $93.8 |
+
+### ⚠️ KẾT LUẬN CỐT LÕI (3 phát hiện)
+1. **Dự đoán hướng = tung đồng xu (47–50.5%)** trên MỌI khung/coin — thống kê chắc
+   (2k–25k mẫu/khung). Logic top-down KHÔNG dự đoán hướng tốt hơn ngẫu nhiên.
+2. **Trade WR luôn DƯỚI ngưỡng hòa vốn của RR** (rr1.5→cần ~40%, đạt 9–31%;
+   rr1.0→cần 50%, đạt 20–43%). → Kỳ vọng âm. TP hiếm chạm trước SL.
+3. **Không cấu hình nào có lãi ổn định.** Chỉnh trigger/confluence/RR chỉ đổi MỨC
+   lỗ (hoặc ngừng giao dịch). KHÔNG có vùng tham số nào tạo ra edge. Tăng số lệnh =
+   tăng lỗ. Khung cao (30m) "ít tệ nhất" chỉ vì ít lệnh → ít phí.
+
+**→ Hệ thống thiếu EDGE thực. Việc cần làm KHÔNG phải tinh chỉnh tham số mà là
+THIẾT KẾ LẠI tín hiệu vào lệnh (nguồn alpha).** Kiến trúc unified-per-symbol là nền
+tảng đúng để xây tín hiệu mới lên trên.
+
+**Caveat phương pháp:** `process_tick` kiểm SL trước TP khi cả hai trong cùng 1 nến
+(bi quan trong nến) → có thể hạ WR thật chút ít; nhưng khoảng cách tới ngưỡng hòa
+vốn quá lớn nên không đổi kết luận.
+
+### 18. STRATEGY LAB (backtest/strategy_lab.py) — TÌM EDGE [MỚI]
+
+Tách *execution* (giữ nguyên `TradeSimulator`) khỏi *alpha* (thay entry/SL/TP). Thử
+breakout / momentum / meanrev × bias on/off × fixedR/trailing.
+
+**🔑 Phát hiện 1 — BUG SIZING (phải fix ở live):** `MIN_LOT=0.01` tạo phơi nhiễm chênh
+**100×** giữa coin: 0.01 lot BTC = $700 notional = **7× vốn $100**; BNB = $6 = 0.06×.
+`lot_from_risk_cap` (3%) bị `normalize_lot` kẹp sàn MIN_LOT → vô hiệu cho coin giá cao
+→ BTC cháy (~−95%) mọi chiến lược dù WR 39–49%. **Fix: sizing theo % rủi ro/vốn, lot
+phân số (bỏ sàn).** Lab patch CÔ LẬP: `lot_sizing.MIN_LOT/LOT_STEP→~0`, `RISK_CAP_PCT
+=risk`, `LOT_BASE/LOT_MAX_DYNAMIC` lớn → mỗi lệnh rủi ro đồng đều 1% vốn.
+
+**🔑 Phát hiện 2 — TẦN SUẤT là kẻ giết người:** notional ≈ 1.3× vốn → phí khứ hồi
+≈ 0.32% vốn/lệnh. ~120 lệnh/3 tháng (trigger 15m) = ~38% phí + kỳ vọng âm → −50%↓.
+
+**🔑 Phát hiện 3 — BUG sizing thứ 3:** `normalize_lot` kết thúc `round(lot,2)` → lot
+phân số nhỏ (BTC ~0.0007) làm tròn về 0 → không trade. Lab patch `normalize_lot`=identity.
+
+**🔑 Phát hiện 4 — KHÔNG CÓ EDGE (kiểm chứng 2 NĂM, 2024-06→2026-06):**
+Ban đầu test 3 tháng (1h) thấy momentum/meanrev "thắng B&H cả 4 coin" → NHƯNG đó là
+**ảo giác do chế độ thị trường** (cửa sổ giảm thưởng cho việc ít phơi nhiễm). Test lại
+trên 2 NĂM (1h, ~18k nến):
+
+| Strategy (1h, 2 năm, risk 1%) | Tổng ret | vs B&H |
+|---|---|---|
+| meanrev_bias | −136% | THUA B&H |
+| momentum_2R | −143% | THUA B&H |
+| breakout_3R | −153% | THUA B&H |
+
+**Bằng chứng dứt khoát:** PAXG (vàng) B&H **+72%** (sóng tăng sạch) — mọi chiến lược ra
+**−52%..−97%** (thua B&H 122–169 điểm). Trend-following biến +72% thành −73% = KHÔNG
+có edge, chỉ có phí + whipsaw. ETH "thắng B&H" chỉ vì ETH sập −57% và bot ít phơi nhiễm.
+
+**KẾT LUẬN CUỐI:** Sau khi thử đủ nguyên mẫu TA (breakout/momentum/meanrev × bias on/off
+× fixedR/trailing × RR 1.5–3 × khung 15m/30m/1h × cửa sổ 3 tháng & 2 năm): **TA đơn giản
+trên OHLC KHÔNG tạo edge dương sau phí qua trọn chu kỳ.** Khung intraday + SL/TP từng lệnh
+không ôm được sóng dài và bị phí bào mòn. KHÔNG wire vào live. Hướng còn lại: (a) position
+trader tần suất CỰC thấp (chỉ theo lật trend khung 1d, ôm lệnh nhiều tuần — CHƯA test),
+(b) nguồn tín hiệu khác (order-flow/funding/on-chain/ML đa đặc trưng), (c) định vị lại
+hệ thống là công cụ giáo dục/paper-trading. **Sizing theo % rủi ro + lot phân số là bug
+THẬT phải fix ở live bất kể hướng nào.**
+
+### 19. POSITION TRADER (backtest/position_trader.py) — HƯỚNG KHẢ THI ✅ [MỚI]
+
+Kiểm chứng hướng (a): bỏ SL/TP & giao dịch dày → chỉ bám trend khung NGÀY (1d),
+giữ lệnh hàng tuần/tháng, đổi trạng thái khi trend lật. Full-allocation (notional=vốn,
+KHÔNG đòn bẩy) để so công bằng với B&H. Vài lệnh/năm → phí ~0.
+
+**Kết quả (~2.3 năm, 2024-02→2026-06):**
+
+| Strategy | Tổng ret | Điểm nhấn |
+|---|---|---|
+| ema_longonly (LONG khi EMA21>EMA50 1d, else CASH) | **+198%** | ETH −1% vs B&H −50% (né sập); BNB +103% vs +44% |
+| bias_longonly | +171% | thắng B&H 3/4, BTC +21% vs +7% |
+| ema_longshort | +285% | BNB +170% nhưng MaxDD tới 61% |
+
+**Ý nghĩa:** kẻ giết bot cũ là TẦN SUẤT/PHÍ + SL hẹp, KHÔNG phải ý tưởng trend. Trend-
+following tần suất thấp trên 1d ĐÁNH BẠI buy-and-hold — chủ yếu nhờ **né sụt giảm lớn**
+(ETH) và **ôm trọn sóng** (BNB). Đây là "trend filter overlay" kinh điển, có cơ sở.
+
+**Caveat trung thực:** (1) Max drawdown vẫn lớn (28–65%) — đây là chiến lược "tốt hơn
+B&H", KHÔNG phải rủi ro thấp. (2) longonly an toàn hơn longshort (short rủi ro, DD cao
+hơn) → khuyến nghị **ema_longonly**. (3) Mẫu 2.3 năm/1 chu kỳ — vẫn cần thêm chu kỳ.
+(4) "Edge" phần lớn là QUẢN TRỊ RỦI RO (đứng ngoài downtrend), không phải alpha kỳ diệu.
+
+**Khuyến nghị:** dùng ema_longonly như TÍN HIỆU PHÂN BỔ hằng ngày (giữ coin khi trend
+1d lên / về USDT khi xuống), KHÔNG phải bot intraday. Có thể wire vào terminal như 1
+"regime badge" mức symbol, check 1 lần/ngày.
+
+### 20. PHÍ EXNESS thay đổi cục diện + chiến lược SWING [MỚI]
+
+Toàn bộ kết luận "intraday luôn lỗ vì phí" dựa trên **phí Binance spot 0.24%/vòng**.
+User trade **Exness** (vàng ~0.03%, crypto ~0.06%/vòng — thấp hơn 4–8×). `strategy_lab.py`
+thêm `--cost` (patch `TradeSimulator.TAKER_FEE`). Chạy lại 1h, 2 năm, cost 0.06%:
+
+| Strategy (1h, 2 năm, cost 0.06%) | Tổng ret | Ghi chú |
+|---|---|---|
+| breakout_3R | **+68%** | ETH +16.6 (B&H −57!), thắng B&H 3/4; bỏ lỡ sóng vàng |
+| breakout_trail | +35% | |
+| **pullback_trend** (swing, MỚI) | +8% | **WR 41–52%, MaxDD chỉ 2–12%**, ~1 lệnh/tháng, thắng B&H 3/4 |
+
+**Phát hiện:** ở phí Exness, giao dịch tần suất vừa KHÔNG còn bị phí giết → có chiến lược
+DƯƠNG qua 2 năm. **`pullback_trend`** (mua nhịp chỉnh trong uptrend, TP 1.5R) cho hồ sơ
+RỦI RO TỐT NHẤT: WR ~50%, drawdown 2–12% (so 30–65% của các chiến lược khác), lãi đều
+nhẹ. `breakout_3R` lãi cao hơn nhưng DD lớn hơn & nhiều lệnh hơn.
+
+**Caveat:** (1) cost 0.06% là ƯỚC LƯỢNG — phải lấy phí THẬT từ tài khoản Exness của user
+(kết quả rất nhạy với cost). (2) Lãi LŨY KẾ 2 năm, KHÔNG đều hàng tháng (đến theo sóng).
+(3) Vàng (B&H +72%) là điểm yếu của pullback/meanrev — không ôm được trend dài. (4) In-sample,
+cần WALK-FORWARD để loại overfit. Bug sizing (mục 18) vẫn phải fix ở live.
+
+### 21. WALK-FORWARD (backtest/walkforward.py) — KIỂM ĐỊNH ĐỘ BỀN [MỚI]
+
+**(A) Độ nhạy phí (lãi TB/coin, 2 năm 1h):**
+
+| Strategy | phí 0.03% | phí 0.06% | phí 0.10% |
+|---|---|---|---|
+| pullback_trend | +2.9% | +2.0% | +0.8% |
+| breakout_3R | +32.8% | +16.9% | **−0.8%** |
+
+→ breakout_3R lãi cao nhưng **chết ở phí ≥0.10%** (chỉ sống ở tài khoản phí thấp: vàng/FX/raw).
+pullback_trend bền với phí nhưng lãi cực nhỏ (≈ hòa vốn).
+
+**(B) Nhất quán qua 6 cửa sổ (~4 tháng/đoạn, phí 0.06%):**
+
+| Strategy | W1 | W2 | W3 | W4 | W5 | W6 | +đoạn |
+|---|---|---|---|---|---|---|---|
+| pullback_trend | −0.1 | −0.9 | +0.2 | −1.3 | **+3.4** | +0.9 | 3/6 |
+| breakout_3R | +1.9 | −2.4 | −2.9 | **+12.1** | **+7.5** | +1.8 | 4/6 |
+
+**KẾT LUẬN WALK-FORWARD (quan trọng nhất):**
+- **KHÔNG có edge ổn định, độc lập chế độ.** Lãi của cả 2 đến từ 1–2 cửa sổ (W4/W5 — giai
+  đoạn có trend), các đoạn khác hòa/âm. WR pullback dao động 33–85% theo đoạn (KHÔNG ổn định).
+- **pullback_trend ≈ hòa vốn** (lãi trong nhiễu) nhưng rủi ro rất thấp (DD 2–12%) → "bảo toàn vốn".
+- **breakout_3R = trend-follower thật**: lãi lũy kế dương NHƯNG **lumpy** (đứng yên/âm nhiều
+  tháng, rồi 1 đợt trend bù) + **rất nhạy phí**.
+- **→ MỤC TIÊU "lãi đều hàng tháng + WR cao ổn định" KHÔNG đạt được với TA đơn giản.** Lãi
+  đến theo sóng trend, tập trung, không đều. Đây là trần của hướng TA — tinh chỉnh thêm =
+  overfit vào mẫu 2 năm này.
+
+### 22. ALT-DATA RESEARCH (funding, order-flow) — đều ~0 edge [MỚI]
+
+Hướng "tín hiệu giàu hơn". Kiểm SỨC DỰ ĐOÁN từng tín hiệu (gộp BTC/ETH/BNB, ~2 năm, 1h):
+
+- **Funding rate** (`backtest/funding_research.py`): corr(funding, fwd return) = +0.001..+0.009
+  (≈0, còn ngược dấu giả thuyết contrarian). Chiến lược contrarian Q1/Q5: WR 47–49%, đều lỗ.
+  → **Funding đứng riêng KHÔNG có edge.**
+- **Order-flow** (taker-buy ratio, `backtest/orderflow_research.py`): corr = +0.004..+0.021
+  (≈0). Có momentum RẤT mờ (mua mạnh→tăng nhẹ ở 72h) nhưng biên ~0.08–0.2% < phí. Không tradeable riêng.
+
+**Meta-kết luận (quan trọng):** TA (nhiều biến thể + walk-forward) + funding + order-flow —
+TẤT CẢ tín hiệu free/đơn giản đều ~0 edge bền trên major crypto. Nhất quán với thị trường
+hiệu quả: tín hiệu đơn giản trên tài sản thanh khoản lớn đã bị arbitrage hết. Edge thật
+thường đòi hỏi: dữ liệu alt đắt/độc quyền, tốc độ (HFT), ML tinh vi trên feature giàu +
+hạ tầng, hoặc thị trường ngách/kém thanh khoản. Setup retail + data free + phương pháp đơn
+giản là nơi KHÓ tìm edge nhất.
+
+**Còn lại:** ML đa đặc trưng (tương tác phi tuyến nhiều tín hiệu yếu) — cần cài scikit-learn
+(môi trường hiện THIẾU). Rủi ro overfit cao, kỳ vọng thực tế thấp vì input đều ~0. Là phép
+thử cuối cùng có cơ sở của hướng systematic.
+
+### 23. ML ĐA ĐẶC TRƯNG + WALK-FORWARD — KHÔNG edge (KẾT LUẬN CUỐI) [MỚI]
+
+`backtest/ml_research.py` (sklearn HistGradientBoosting). 16 feature (TA + order-flow +
+funding), gộp BTC/ETH/BNB, 54.576 mẫu, nhãn = dấu lợi suất 24h. Walk-forward 13 fold
+(train 12 tháng → test 1 tháng, PURGE H giờ chống rò rỉ), chuẩn hoá theo train.
+
+**Kết quả OOS (28.080 mẫu):**
+- Directional accuracy = **49.86%** (baseline lớp đa số 50.66% → mô hình CÒN TỆ HƠN đoán bừa).
+- **AUC = 0.4982** (≈0.5 = vô dụng).
+- Chiến lược mọi ngưỡng p (0.52/0.55/0.58): đều ÂM (−58% đến −73%), WR 44–49%.
+
+**KẾT LUẬN CUỐI CÙNG CỦA TOÀN BỘ NGHIÊN CỨU:** Mọi hướng — TA (nhiều biến thể + walk-forward),
+funding, order-flow, và ML phi tuyến đa đặc trưng (walk-forward nghiêm ngặt) — đều hội tụ:
+**KHÔNG có edge bền, khai thác được trong dữ liệu free + phương pháp tiêu chuẩn trên major
+crypto.** AUC 0.498 với GBM trên 54k mẫu/13 fold là bằng chứng gần như dứt khoát ở quy mô
+retail. Lợi nhuận tự động từ tín hiệu đơn giản trên tài sản thanh khoản lớn = không có sẵn.
+
+**Giá trị THẬT đã tạo ra (nên giữ & wire vào live):**
+1. **Bug sizing** (mục 18): % rủi ro + lot phân số (bỏ MIN_LOT 0.01 & round(lot,2)) — fix thật.
+2. **Regime filter 1d** (mục 19): công cụ QUẢN TRỊ RỦI RO (né downtrend lớn — ETH −50%→−1%).
+3. **Backtest harness** (`backtest/`): để user tự kiểm mọi ý tưởng tương lai, chống overfit.
+Định vị đúng của hệ thống: **trợ lý phân tích/giáo dục/quản trị rủi ro**, KHÔNG phải máy in tiền.
+
+### 24. TRIỂN KHAI LIVE từ nghiên cứu (v6) [MỚI]
+
+Ba giá trị thật của nghiên cứu đã được wire vào hệ thống live:
+
+**(1) Fix bug sizing — `lot_sizing.py` + `signal_engine.py:open_position`:**
+- Thêm `lot_sizing.risk_based_lot(capital, sl_dist, symbol)` — lot RAW theo % rủi ro
+  (`RISK_CAP_PCT × vốn / (sl_dist × contract)`), KHÔNG kẹp sàn.
+- `open_position` giờ: nếu `min(dyn_lot, risk_lot_raw) < MIN_LOT` → **BỎ lệnh + cảnh báo**
+  thay vì âm thầm kẹp sàn về 0.01 (lỗi cũ khiến vốn nhỏ trên coin giá cao nhận rủi ro
+  >> RISK_CAP_PCT). VD: $100 trên BTC (lot cần ~0.0015 < 0.01) → bỏ lệnh đúng; trên BNB
+  (lot 0.05) → vào bình thường. Đây là hành vi QUẢN TRỊ RỦI RO đúng.
+
+**(2) Regime Badge 1d — `main.py:compute_regime_1d` + `static/index.html`:**
+- `compute_regime_1d(symbol)`: EMA21 vs EMA50 trên cache 1d → `UPTREND`/`CASH`.
+  Gắn vào `analysis["regime_1d"]` ở CẢ 2 nhánh broadcast (intra-tick + nến đóng).
+- Frontend: badge `#regime-1d-badge` trong card Live Price (🟢 UPTREND / ⚪ CASH), tooltip
+  giải thích đây là công cụ quản trị rủi ro xem ~1 lần/ngày, KHÔNG phải tín hiệu intraday.
+- → TICK message thêm field `regime_1d: {state, ema21, ema50}`.
+
+**(3) Backtest harness** — `backtest/README.md` hướng dẫn đầy đủ (chạy, thêm chiến lược,
+đọc kết quả, chống overfit). Để user tự kiểm mọi ý tưởng tương lai một cách trung thực.

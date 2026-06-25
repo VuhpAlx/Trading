@@ -1,0 +1,470 @@
+{
+  "trigger": "1h",
+  "bias": [
+    "4h",
+    "1d"
+  ],
+  "strats": {
+    "breakout_2R": {
+      "entry": "breakout",
+      "bias": true,
+      "n": 20,
+      "sl_atr": 1.5,
+      "tp": "fixedR",
+      "rr": 2.0
+    },
+    "breakout_3R": {
+      "entry": "breakout",
+      "bias": true,
+      "n": 20,
+      "sl_atr": 1.5,
+      "tp": "fixedR",
+      "rr": 3.0
+    },
+    "breakout_trail": {
+      "entry": "breakout",
+      "bias": true,
+      "n": 20,
+      "sl_atr": 1.5,
+      "tp": "trail",
+      "trail_atr": 3.0
+    },
+    "momentum_2R": {
+      "entry": "momentum",
+      "bias": true,
+      "sl_atr": 1.5,
+      "tp": "fixedR",
+      "rr": 2.0
+    },
+    "meanrev_bias": {
+      "entry": "meanrev",
+      "bias": true,
+      "sl_atr": 1.2,
+      "tp": "fixedR",
+      "rr": 1.5
+    },
+    "meanrev_noBias": {
+      "entry": "meanrev",
+      "bias": false,
+      "sl_atr": 1.2,
+      "tp": "fixedR",
+      "rr": 1.5
+    },
+    "pullback_trend": {
+      "entry": "pullback",
+      "bias": true,
+      "sl_atr": 1.5,
+      "tp": "fixedR",
+      "rr": 1.5
+    },
+    "regime_meanrev": {
+      "entry": "regime_meanrev",
+      "bias": false,
+      "sl_atr": 1.5,
+      "tp": "bbmid"
+    }
+  },
+  "results": {
+    "breakout_2R": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 313,
+        "wins": 114,
+        "losses": 199,
+        "liq": 0,
+        "winrate": 36.4,
+        "final_capital": 100.57,
+        "return_pct": 0.57,
+        "max_dd_pct": 32.27,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 299,
+        "wins": 99,
+        "losses": 200,
+        "liq": 0,
+        "winrate": 33.1,
+        "final_capital": 81.26,
+        "return_pct": -18.74,
+        "max_dd_pct": 22.06,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 331,
+        "wins": 122,
+        "losses": 209,
+        "liq": 0,
+        "winrate": 36.9,
+        "final_capital": 107.72,
+        "return_pct": 7.72,
+        "max_dd_pct": 32.7,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 314,
+        "wins": 122,
+        "losses": 192,
+        "liq": 0,
+        "winrate": 38.9,
+        "final_capital": 90.52,
+        "return_pct": -9.48,
+        "max_dd_pct": 23.38,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "breakout_3R": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 291,
+        "wins": 78,
+        "losses": 213,
+        "liq": 0,
+        "winrate": 26.8,
+        "final_capital": 93.46,
+        "return_pct": -6.54,
+        "max_dd_pct": 28.31,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 266,
+        "wins": 75,
+        "losses": 191,
+        "liq": 0,
+        "winrate": 28.2,
+        "final_capital": 116.63,
+        "return_pct": 16.63,
+        "max_dd_pct": 14.68,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 300,
+        "wins": 84,
+        "losses": 216,
+        "liq": 0,
+        "winrate": 28.0,
+        "final_capital": 109.59,
+        "return_pct": 9.59,
+        "max_dd_pct": 34.65,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 276,
+        "wins": 93,
+        "losses": 183,
+        "liq": 0,
+        "winrate": 33.7,
+        "final_capital": 148.04,
+        "return_pct": 48.04,
+        "max_dd_pct": 17.71,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "breakout_trail": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 260,
+        "wins": 0,
+        "losses": 260,
+        "liq": 0,
+        "winrate": 0.0,
+        "final_capital": 93.16,
+        "return_pct": -6.84,
+        "max_dd_pct": 32.48,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 248,
+        "wins": 0,
+        "losses": 248,
+        "liq": 0,
+        "winrate": 0.0,
+        "final_capital": 93.78,
+        "return_pct": -6.22,
+        "max_dd_pct": 25.77,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 274,
+        "wins": 0,
+        "losses": 274,
+        "liq": 0,
+        "winrate": 0.0,
+        "final_capital": 98.97,
+        "return_pct": -1.03,
+        "max_dd_pct": 36.01,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 245,
+        "wins": 0,
+        "losses": 245,
+        "liq": 0,
+        "winrate": 0.0,
+        "final_capital": 149.53,
+        "return_pct": 49.53,
+        "max_dd_pct": 19.76,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "momentum_2R": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 200,
+        "wins": 72,
+        "losses": 128,
+        "liq": 0,
+        "winrate": 36.0,
+        "final_capital": 97.31,
+        "return_pct": -2.69,
+        "max_dd_pct": 15.08,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 182,
+        "wins": 67,
+        "losses": 115,
+        "liq": 0,
+        "winrate": 36.8,
+        "final_capital": 107.65,
+        "return_pct": 7.65,
+        "max_dd_pct": 13.69,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 187,
+        "wins": 71,
+        "losses": 116,
+        "liq": 0,
+        "winrate": 38.0,
+        "final_capital": 110.49,
+        "return_pct": 10.49,
+        "max_dd_pct": 12.72,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 221,
+        "wins": 76,
+        "losses": 145,
+        "liq": 0,
+        "winrate": 34.4,
+        "final_capital": 69.12,
+        "return_pct": -30.88,
+        "max_dd_pct": 33.1,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "meanrev_bias": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 125,
+        "wins": 49,
+        "losses": 76,
+        "liq": 0,
+        "winrate": 39.2,
+        "final_capital": 85.44,
+        "return_pct": -14.56,
+        "max_dd_pct": 21.1,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 120,
+        "wins": 47,
+        "losses": 73,
+        "liq": 0,
+        "winrate": 39.2,
+        "final_capital": 89.42,
+        "return_pct": -10.58,
+        "max_dd_pct": 20.9,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 113,
+        "wins": 48,
+        "losses": 65,
+        "liq": 0,
+        "winrate": 42.5,
+        "final_capital": 96.74,
+        "return_pct": -3.26,
+        "max_dd_pct": 14.26,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 112,
+        "wins": 45,
+        "losses": 67,
+        "liq": 0,
+        "winrate": 40.2,
+        "final_capital": 79.55,
+        "return_pct": -20.45,
+        "max_dd_pct": 26.73,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "meanrev_noBias": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 431,
+        "wins": 160,
+        "losses": 271,
+        "liq": 0,
+        "winrate": 37.1,
+        "final_capital": 46.54,
+        "return_pct": -53.46,
+        "max_dd_pct": 55.92,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 440,
+        "wins": 167,
+        "losses": 273,
+        "liq": 0,
+        "winrate": 38.0,
+        "final_capital": 58.13,
+        "return_pct": -41.87,
+        "max_dd_pct": 46.2,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 424,
+        "wins": 173,
+        "losses": 251,
+        "liq": 0,
+        "winrate": 40.8,
+        "final_capital": 72.73,
+        "return_pct": -27.27,
+        "max_dd_pct": 33.47,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 434,
+        "wins": 155,
+        "losses": 279,
+        "liq": 0,
+        "winrate": 35.7,
+        "final_capital": 24.22,
+        "return_pct": -75.78,
+        "max_dd_pct": 76.98,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "pullback_trend": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 21,
+        "wins": 11,
+        "losses": 10,
+        "liq": 0,
+        "winrate": 52.4,
+        "final_capital": 104.64,
+        "return_pct": 4.64,
+        "max_dd_pct": 2.14,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 29,
+        "wins": 12,
+        "losses": 17,
+        "liq": 0,
+        "winrate": 41.4,
+        "final_capital": 99.41,
+        "return_pct": -0.59,
+        "max_dd_pct": 5.74,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 27,
+        "wins": 12,
+        "losses": 15,
+        "liq": 0,
+        "winrate": 44.4,
+        "final_capital": 101.04,
+        "return_pct": 1.04,
+        "max_dd_pct": 11.64,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 21,
+        "wins": 11,
+        "losses": 10,
+        "liq": 0,
+        "winrate": 52.4,
+        "final_capital": 102.84,
+        "return_pct": 2.84,
+        "max_dd_pct": 3.39,
+        "buyhold_pct": 72.2
+      }
+    ],
+    "regime_meanrev": [
+      {
+        "symbol": "BTCUSDT",
+        "trades": 138,
+        "wins": 55,
+        "losses": 83,
+        "liq": 0,
+        "winrate": 39.9,
+        "final_capital": 87.77,
+        "return_pct": -12.23,
+        "max_dd_pct": 19.71,
+        "buyhold_pct": -14.3
+      },
+      {
+        "symbol": "ETHUSDT",
+        "trades": 147,
+        "wins": 56,
+        "losses": 91,
+        "liq": 0,
+        "winrate": 38.1,
+        "final_capital": 89.07,
+        "return_pct": -10.93,
+        "max_dd_pct": 17.25,
+        "buyhold_pct": -57.4
+      },
+      {
+        "symbol": "BNBUSDT",
+        "trades": 165,
+        "wins": 60,
+        "losses": 105,
+        "liq": 0,
+        "winrate": 36.4,
+        "final_capital": 76.44,
+        "return_pct": -23.56,
+        "max_dd_pct": 23.6,
+        "buyhold_pct": -19.1
+      },
+      {
+        "symbol": "PAXGUSDT",
+        "trades": 153,
+        "wins": 67,
+        "losses": 86,
+        "liq": 0,
+        "winrate": 43.8,
+        "final_capital": 78.28,
+        "return_pct": -21.72,
+        "max_dd_pct": 26.54,
+        "buyhold_pct": 72.2
+      }
+    ]
+  },
+  "elapsed_sec": 396.9
+}

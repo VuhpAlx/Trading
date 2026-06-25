@@ -33,6 +33,15 @@ MIN_CONFLUENCE    = 3      # Số yếu tố tối thiểu cùng hướng (xem s
 STRUCTURE_LOOKBACK = 200   # Số nến quét để tìm swing high/low (S/R)
 SWING_STRENGTH     = 3      # Fractal: 1 đỉnh/đáy phải cao/thấp hơn N nến 2 bên
 
+# --- Forward Testing (kiểm chứng dự đoán hướng) ----------------------
+# Sau mỗi nến đóng, hệ thống ghi 1 dự đoán hướng và kiểm chứng sau N nến:
+#   WIN  = giá đi ĐÚNG hướng ít nhất FLAT_ATR_MULT × ATR
+#   LOSS = giá đi NGƯỢC hướng ít nhất FLAT_ATR_MULT × ATR
+#   FLAT = đi ngang trong dải nhiễu (không tính vào hit-rate)
+FORWARD_TEST_BARS       = 5     # Nhìn trước bao nhiêu nến để kiểm chứng
+FORWARD_FLAT_ATR_MULT   = 0.2   # Ngưỡng "đi ngang" = 0.2 × ATR (lọc nhiễu)
+FORWARD_TARGET_ATR_MULT = 0.6   # Target dự kiến = giá ± 0.6 × ATR (vẽ vùng + tham chiếu)
+
 # --- Dữ liệu / cache -------------------------------------------------
 HISTORY_LIMIT  = 1000      # Số nến fetch khi bootstrap
 MAX_CACHE_SIZE = 1000      # Giữ tối đa 1000 nến trong RAM

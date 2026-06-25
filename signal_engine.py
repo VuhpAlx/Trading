@@ -14,6 +14,7 @@ import lot_sizing
 from config import (
     HTF_MAP, MIN_RR_AFTER_FEES, MIN_CONFLUENCE,
     STRUCTURE_LOOKBACK, SWING_STRENGTH, LEVERAGE,
+    FORWARD_TEST_BARS, FORWARD_FLAT_ATR_MULT, FORWARD_TARGET_ATR_MULT,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -48,7 +49,11 @@ class AdaptiveScorer:
 
         # EMA-smoothed win stats (decay = 0.97 → half-life ~23 trades)
         self.ema_winrate: float = 50.0
-        self.stats = {"win": 0, "loss": 0, "partial": 0, "total": 0}
+        # stats = LIFETIME (nạp từ file). session_stats = chỉ phiên chạy hiện tại
+        # (forward-test tracker chỉ hiển thị phiên này để không lẫn dữ liệu cũ).
+        self.stats = {"win": 0, "loss": 0, "flat": 0, "total": 0}
+        self.session_stats = {"win": 0, "loss": 0, "flat": 0}
+        self.session_start: int = int(datetime.now().timestamp())
         self.reverse_mode: bool = False
 
         # Batch learning buffer — weights only update every 20 evaluations
@@ -69,6 +74,10 @@ class AdaptiveScorer:
             with open(self.ml_log_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
+            # CHỈ dùng để replay TRỌNG SỐ + thống kê LIFETIME.
+            # KHÔNG đổ vào recent_results — tracker forward-test chỉ hiển thị
+            # phiên hiện tại (tránh lẫn dữ liệu cũ nhiều ngày). recent_results
+            # bắt đầu rỗng mỗi phiên, chỉ điền khi evaluate_and_learn chạy live.
             for line in lines[-500:]:
                 line = line.strip()
                 if not line:
@@ -79,45 +88,25 @@ class AdaptiveScorer:
                     continue
 
                 try:
-                    res       = data.get("result")
-                    pred      = data.get("prediction") or {}
-                    direction = pred.get("direction") or ""
-                    raw_sigs  = data.get("raw_signals") or {}
-                    if not raw_sigs or not res:
+                    # Tương thích 2 schema: mới (result/prediction.direction) và
+                    # cũ (final_result/predict_direction).
+                    res = data.get("result") or data.get("final_result")
+                    pred = data.get("prediction") or {}
+                    direction = pred.get("direction") or data.get("predict_direction") or ""
+                    raw_sigs = data.get("raw_signals") or {}
+                    if not res:
+                        continue
+                    if res not in ("WIN", "LOSS", "FLAT", "PARTIAL"):
                         continue
 
                     self._apply_result_to_stats(res)
-                    factor = self._result_factor(res)
-                    self._adjust_weights(raw_sigs, direction, factor, lr=0.01)
-
-                    # Build recent_results display entry
-                    rng = pred.get("range") or {}
-                    try:
-                        rng_str = (
-                            f"{float(rng.get('min', 0)):.2f} - "
-                            f"{float(rng.get('max', 0)):.2f}"
-                        )
-                    except (TypeError, ValueError):
-                        rng_str = "N/A"
-
-                    t_str = data.get("time") or ""
-                    if "T" in t_str:
-                        try:
-                            t_str = datetime.fromisoformat(t_str).strftime('%H:%M:%S')
-                        except Exception:
-                            pass
-
-                    self.recent_results.insert(0, {
-                        "time": t_str, "direction": direction, "range": rng_str,
-                        "actual_price": data.get("actual_price") or 0,
-                        "final_result": res,
-                    })
+                    if raw_sigs:
+                        factor = self._result_factor(res)
+                        self._adjust_weights(raw_sigs, direction, factor, lr=0.01)
                 except Exception as e:
                     logger.debug(f"Skip malformed history entry: {e}")
                     continue
 
-            self.recent_results = self.recent_results[:15]
-            self._recalc_ema_winrate()
             self._check_reverse_mode()
 
         except Exception as e:
@@ -126,7 +115,8 @@ class AdaptiveScorer:
     # ---------- weight helpers ----------
 
     def _result_factor(self, result: str) -> float:
-        return {"WIN": 1.0, "PARTIAL": 0.2, "LOSS": -0.8}.get(result, 0.0)
+        # FLAT (đi ngang) → 0.0: không thưởng/phạt trọng số. PARTIAL: legacy.
+        return {"WIN": 1.0, "PARTIAL": 0.2, "FLAT": 0.0, "LOSS": -0.8}.get(result, 0.0)
 
     def _adjust_weights(self, raw_sigs: dict, direction: str, factor: float, lr: float = 0.05):
         for ind, val in raw_sigs.items():
@@ -144,8 +134,8 @@ class AdaptiveScorer:
             self.stats["win"] += 1
         elif result == "LOSS":
             self.stats["loss"] += 1
-        elif result == "PARTIAL":
-            self.stats["partial"] += 1
+        else:   # FLAT (hoặc PARTIAL legacy) — đi ngang, không tính hit-rate
+            self.stats["flat"] += 1
 
     def _recalc_ema_winrate(self):
         alpha = 0.15
@@ -170,8 +160,14 @@ class AdaptiveScorer:
         return {k: round(v / total, 4) for k, v in self.weights.items()}
 
     def get_winrate(self) -> float:
+        # LIFETIME hit-rate (WIN / (WIN+LOSS), bỏ FLAT)
         total = self.stats["win"] + self.stats["loss"]
         return round((self.stats["win"] / total) * 100, 1) if total > 0 else 0.0
+
+    def get_session_winrate(self) -> float:
+        # Hit-rate CHỈ phiên hiện tại (forward-test trực tiếp)
+        total = self.session_stats["win"] + self.session_stats["loss"]
+        return round((self.session_stats["win"] / total) * 100, 1) if total > 0 else 0.0
 
     def get_ema_winrate(self) -> float:
         return round(self.ema_winrate, 1)
@@ -186,43 +182,66 @@ class AdaptiveScorer:
                 continue
 
             direction = p['direction']
-            move = current_close - p['start_price']
-            correct_dir = (direction.startswith("BULL") and move > 0) or \
-                          (direction.startswith("BEAR") and move < 0)
-            hit_range = p['range']['min'] <= current_close <= p['range']['max']
+            start_price = p['start_price']
+            move = current_close - start_price
 
-            result = "WIN" if (hit_range and correct_dir) else ("PARTIAL" if correct_dir else "LOSS")
+            # Tiêu chí ĐÚNG HƯỚNG + ngưỡng ý nghĩa (loại nhiễu đi ngang):
+            #   ngưỡng = FORWARD_FLAT_ATR_MULT × ATR (lúc đăng ký dự đoán)
+            atr = p.get('atr_snapshot', 0.0) or (start_price * 0.002)
+            thr = atr * FORWARD_FLAT_ATR_MULT
+            is_bull = direction.startswith("BULL")
+            if is_bull:
+                result = "WIN" if move >= thr else ("LOSS" if move <= -thr else "FLAT")
+            else:
+                result = "WIN" if move <= -thr else ("LOSS" if move >= thr else "FLAT")
+
+            # Tham khảo: range cũ có trúng không (chỉ để log, không gating)
+            rng = p.get('range') or {}
+            hit_range = bool(rng) and (rng.get('min', 0) <= current_close <= rng.get('max', 0))
 
             self._apply_result_to_stats(result)
+            if result == "WIN":
+                self.session_stats["win"] += 1
+            elif result == "LOSS":
+                self.session_stats["loss"] += 1
+            else:
+                self.session_stats["flat"] += 1
             factor = self._result_factor(result)
 
             # Buffer result instead of updating weights immediately.
             self._learning_buffer.append((p['raw_signals'], direction, factor))
 
-            # EMA winrate updates immediately (display only)
-            alpha = 0.15
-            is_win = 1.0 if result == "WIN" else 0.0
-            self.ema_winrate = alpha * is_win * 100 + (1 - alpha) * self.ema_winrate
+            # EMA winrate updates immediately (display only); FLAT không đẩy lên/xuống mạnh
+            if result != "FLAT":
+                alpha = 0.15
+                is_win = 1.0 if result == "WIN" else 0.0
+                self.ema_winrate = alpha * is_win * 100 + (1 - alpha) * self.ema_winrate
             self._check_reverse_mode()
 
+            # recent_results: lưu EPOCH ts (frontend tự format ngày+giờ), kèm target
             self.recent_results.insert(0, {
-                "time": datetime.fromtimestamp(target_time).strftime('%H:%M:%S'),
+                "ts": int(target_time),
                 "direction": direction,
-                "range": f"{p['range']['min']:.2f} - {p['range']['max']:.2f}",
+                "target": round(p.get('target', 0.0), 4),
+                "start_price": round(start_price, 4),
                 "actual_price": round(current_close, 2),
                 "final_result": result,
             })
-            self.recent_results = self.recent_results[:15]
+            self.recent_results = self.recent_results[:30]
 
             log_entry = {
                 "time": datetime.fromtimestamp(target_time).isoformat(),
+                "ts": int(target_time),
                 "symbol": self.symbol, "timeframe": self.timeframe,
-                "prediction": {"direction": direction, "range": p['range'],
-                               "confidence": p.get('confidence', 0)},
+                "prediction": {"direction": direction, "target": p.get('target'),
+                               "range": p.get('range'), "confidence": p.get('confidence', 0)},
                 "signal": p.get("signal"), "score": p.get("score"),
                 "raw_signals": p['raw_signals'],
                 "indicators_snapshot": p.get("indicators_snapshot", {}),
+                "start_price": round(start_price, 4),
                 "actual_price": round(current_close, 4),
+                "threshold": round(thr, 4),
+                "hit_range": hit_range,
                 "result": result,
             }
             self._async_write(self.ml_log_file, log_entry)
@@ -354,8 +373,19 @@ class TradeSimulator:
         # --- LOT ĐỘNG: tín hiệu càng mạnh lot càng lớn, nhưng bị chặn rủi ro ---
         dyn_lot = lot_sizing.compute_dynamic_lot(confluence, bias_strength,
                                                  min_confluence=MIN_CONFLUENCE)
-        cap_lot = lot_sizing.lot_from_risk_cap(self.capital, sl_dist, self.symbol, actual_entry)
-        lot = min(dyn_lot, cap_lot)
+        # Lot theo % rủi ro — RAW (chưa kẹp sàn). Nếu nhỏ hơn MIN_LOT nghĩa là
+        # lot nhỏ nhất giao dịch được đã VƯỢT hạn mức rủi ro → BỎ lệnh thay vì
+        # âm thầm nhận rủi ro quá lớn (fix bug sizing: vốn nhỏ trên coin giá cao).
+        risk_lot_raw = lot_sizing.risk_based_lot(self.capital, sl_dist, self.symbol)
+        lot_raw = min(dyn_lot, risk_lot_raw)
+        if lot_raw < lot_sizing.MIN_LOT:
+            self.notifications.append(
+                f"⚠️ Bỏ lệnh {self.symbol}: vốn ${self.capital:.0f} quá nhỏ — lot tối thiểu "
+                f"{lot_sizing.MIN_LOT} vượt hạn mức rủi ro {lot_sizing.RISK_CAP_PCT*100:.0f}%/lệnh "
+                f"(cần ~{lot_raw:.4f} lot). Tăng vốn / chọn coin giá thấp / SL gần hơn."
+            )
+            return False
+        lot = lot_sizing.normalize_lot(lot_raw)   # về bội số LOT_STEP của sàn
 
         # --- Kiểm tra ký quỹ: hạ lot cho vừa free margin, bỏ lệnh nếu không đủ ---
         margin = lot_sizing.margin_required(lot, self.symbol, actual_entry, LEVERAGE)
@@ -527,7 +557,9 @@ class AdvancedSignalEngine:
             },
             "indicators": {}, "raw_signals": {},
             "weights": self.scorer.get_weights(),
-            "winrate": 0.0, "tracker": [], "notifications": [],
+            "winrate": 0.0, "ema_winrate": 50.0,
+            "session_winrate": 0.0, "session_stats": {"win": 0, "loss": 0, "flat": 0},
+            "tracker": [], "notifications": [],
         }
 
     def set_capital(self, value: float):
@@ -795,9 +827,28 @@ class AdvancedSignalEngine:
                 bb_upper=bb_u, bb_lower=bb_l,
                 momentum_score=self.smoothed_score, direction=pe_dir,
             )
-            conf_pred = pred_result["confidence"]
+
+            # --- Confidence CHÍNH XÁC HƠN: dựa vào sức mạnh bias + confluence + ADX ---
+            # (thay công thức cũ chỉ từ ATR/giá, gần như luôn ~0.94)
+            cur_conf = max(buy_conf, sell_conf)
+            conf_pred = max(0.05, min(0.95,
+                0.30 + 0.40 * bias_strength
+                     + 0.15 * min(1.0, cur_conf / 6.0)
+                     + 0.15 * min(1.0, adx / 30.0)))
+
+            # --- Target dự kiến theo hướng (cho forward-test + vẽ vùng trên chart) ---
+            tgt_dist = atr * FORWARD_TARGET_ATR_MULT
+            zone_buf = atr * FORWARD_FLAT_ATR_MULT
+            if p_dir == "BULLISH":
+                target = c_price + tgt_dist
+            else:
+                target = c_price - tgt_dist
+            target_zone = {"min": round(target - zone_buf, 4), "max": round(target + zone_buf, 4)}
+
             pred = {"direction": p_dir, "mid_price": pred_result["mid_price"],
-                    "range": pred_result["range"]}
+                    "range": pred_result["range"],
+                    "target": round(target, 4), "target_zone": target_zone,
+                    "horizon_bars": FORWARD_TEST_BARS}
 
             indicators_snap = {
                 "EMA_9": round(ema9, 4), "EMA_21": round(ema21, 4),
@@ -809,9 +860,10 @@ class AdvancedSignalEngine:
             }
 
             self.scorer.register_prediction(
-                c_time + (self._tf_to_sec(self.interval) * 5),
+                c_time + (self._tf_to_sec(self.interval) * FORWARD_TEST_BARS),
                 {
-                    "direction": p_dir, "range": pred['range'], "confidence": conf_pred,
+                    "direction": p_dir, "range": pred['range'], "target": round(target, 4),
+                    "target_zone": target_zone, "confidence": conf_pred,
                     "start_price": c_price, "raw_signals": raw_sigs,
                     "indicators_snapshot": indicators_snap, "atr_snapshot": atr,
                     "signal": action, "score": self.smoothed_score,
@@ -822,19 +874,21 @@ class AdvancedSignalEngine:
             disp_conf = buy_conf if buy_conf >= sell_conf else -sell_conf
             disp_score = round(max(-1.0, min(1.0, disp_conf / 6.0)), 3)
 
-            # Tracker
+            # Tracker — mỗi mục mang EPOCH ts (frontend tự format ngày+giờ),
+            # sort theo ts SỐ (không theo chuỗi giờ → không vỡ khi qua ngày).
             pending_list = [
                 {
-                    "time": datetime.fromtimestamp(k).strftime('%H:%M:%S'),
+                    "ts": int(k),
                     "direction": v['direction'],
-                    "range": f"{v['range']['min']:.2f} - {v['range']['max']:.2f}",
+                    "target": round(v.get('target', 0.0), 4),
+                    "start_price": round(v.get('start_price', 0.0), 4),
                     "actual_price": 0.0, "final_result": "WAITING",
                 }
                 for k, v in list(self.scorer.pending_predictions.items())
             ]
             combined_tracker = sorted(
-                pending_list + self.scorer.recent_results[:15],
-                key=lambda x: x["time"], reverse=True,
+                pending_list + self.scorer.recent_results[:20],
+                key=lambda x: x.get("ts", 0), reverse=True,
             )
 
             self.ui_state.update({
@@ -849,6 +903,8 @@ class AdvancedSignalEngine:
                 "weights": weights,
                 "winrate": self.scorer.get_winrate(),
                 "ema_winrate": self.scorer.get_ema_winrate(),
+                "session_winrate": self.scorer.get_session_winrate(),
+                "session_stats": self.scorer.session_stats,
                 "tracker": combined_tracker,
                 "regime": regime,
             })

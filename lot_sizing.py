@@ -56,6 +56,21 @@ def compute_dynamic_lot(confluence: float, bias_strength: float,
     return normalize_lot(lot)
 
 
+def risk_based_lot(capital: float, sl_dist: float, symbol: str) -> float:
+    """
+    Lot THEO % RỦI RO — RAW (chưa kẹp sàn MIN_LOT, chưa làm tròn step).
+    Khoản lỗ tại SL = sl_dist × lot × contract = RISK_CAP_PCT × vốn.
+    Dùng để KIỂM TRA: nếu giá trị này < MIN_LOT nghĩa là lot nhỏ nhất giao
+    dịch được (0.01) đã vượt hạn mức rủi ro → KHÔNG nên vào lệnh (vốn quá nhỏ
+    cho symbol/SL này). Tránh lỗi cũ: normalize_lot kẹp sàn về 0.01 → âm thầm
+    nhận rủi ro lớn hơn RISK_CAP_PCT rất nhiều (đặc biệt coin giá cao như BTC).
+    """
+    contract = get_contract_size(symbol)
+    if sl_dist <= 0 or contract <= 0:
+        return 0.0
+    return (RISK_CAP_PCT * max(capital, 1.0)) / (sl_dist * contract)
+
+
 def lot_from_risk_cap(capital: float, sl_dist: float, symbol: str, price: float) -> float:
     """
     Lot TỐI ĐA để khoản lỗ khi chạm SL không vượt RISK_CAP_PCT × vốn.

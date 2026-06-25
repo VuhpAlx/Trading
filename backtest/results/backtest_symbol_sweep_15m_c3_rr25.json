@@ -1,0 +1,147 @@
+{
+  "config": {
+    "trigger": "15m",
+    "bias": [
+      "1h",
+      "4h",
+      "1d"
+    ],
+    "min_conf": 3,
+    "min_rr": 2.5
+  },
+  "results": [
+    {
+      "pred_total": 8815,
+      "pred_win": 3826,
+      "pred_loss": 3868,
+      "pred_flat": 1121,
+      "pred_winrate": 49.7,
+      "trades_total": 0,
+      "trade_win": 0,
+      "trade_loss": 0,
+      "trade_liquidated": 0,
+      "trade_winrate": 0.0,
+      "pnl_usd_sum": 0,
+      "max_drawdown_pct": 0.0,
+      "symbol": "BTCUSDT",
+      "trigger_tf": "15m",
+      "bias_tfs": [
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "candles_evaluated": 8820,
+      "eval_from": "2026-03-24 12:15:00+00:00",
+      "eval_to": "2026-06-24 09:00:00+00:00",
+      "actions": {
+        "BUY": 0,
+        "SELL": 0,
+        "HOLD": 8820
+      },
+      "final_capital": 100.0,
+      "return_pct": 0.0,
+      "errors": 0,
+      "seconds": 38.6
+    },
+    {
+      "pred_total": 8815,
+      "pred_win": 3658,
+      "pred_loss": 3967,
+      "pred_flat": 1190,
+      "pred_winrate": 48.0,
+      "trades_total": 3,
+      "trade_win": 0,
+      "trade_loss": 3,
+      "trade_liquidated": 0,
+      "trade_winrate": 0.0,
+      "pnl_usd_sum": -1.45,
+      "max_drawdown_pct": 1.14,
+      "symbol": "ETHUSDT",
+      "trigger_tf": "15m",
+      "bias_tfs": [
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "candles_evaluated": 8820,
+      "eval_from": "2026-03-24 12:15:00+00:00",
+      "eval_to": "2026-06-24 09:00:00+00:00",
+      "actions": {
+        "BUY": 1,
+        "SELL": 2,
+        "HOLD": 8817
+      },
+      "final_capital": 98.54,
+      "return_pct": -1.46,
+      "errors": 0,
+      "seconds": 38.3
+    },
+    {
+      "pred_total": 8815,
+      "pred_win": 3731,
+      "pred_loss": 3921,
+      "pred_flat": 1163,
+      "pred_winrate": 48.8,
+      "trades_total": 0,
+      "trade_win": 0,
+      "trade_loss": 0,
+      "trade_liquidated": 0,
+      "trade_winrate": 0.0,
+      "pnl_usd_sum": 0,
+      "max_drawdown_pct": 0.0,
+      "symbol": "BNBUSDT",
+      "trigger_tf": "15m",
+      "bias_tfs": [
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "candles_evaluated": 8820,
+      "eval_from": "2026-03-24 12:15:00+00:00",
+      "eval_to": "2026-06-24 09:00:00+00:00",
+      "actions": {
+        "BUY": 0,
+        "SELL": 0,
+        "HOLD": 8820
+      },
+      "final_capital": 100.0,
+      "return_pct": 0.0,
+      "errors": 0,
+      "seconds": 36.2
+    },
+    {
+      "pred_total": 8815,
+      "pred_win": 3699,
+      "pred_loss": 4071,
+      "pred_flat": 1045,
+      "pred_winrate": 47.6,
+      "trades_total": 8,
+      "trade_win": 0,
+      "trade_loss": 8,
+      "trade_liquidated": 0,
+      "trade_winrate": 0.0,
+      "pnl_usd_sum": -6.2,
+      "max_drawdown_pct": 5.47,
+      "symbol": "PAXGUSDT",
+      "trigger_tf": "15m",
+      "bias_tfs": [
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "candles_evaluated": 8820,
+      "eval_from": "2026-03-24 12:15:00+00:00",
+      "eval_to": "2026-06-24 09:00:00+00:00",
+      "actions": {
+        "BUY": 0,
+        "SELL": 8,
+        "HOLD": 8812
+      },
+      "final_capital": 93.81,
+      "return_pct": -6.19,
+      "errors": 0,
+      "seconds": 38.6
+    }
+  ],
+  "elapsed_sec": 151.7
+}

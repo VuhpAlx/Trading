@@ -153,6 +153,9 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
       <div style="text-align:right">
         <div class="lbl">Market Regime</div>
         <div id="regime-badge" class="regime regime-NEUTRAL" style="margin-top:4px">NEUTRAL</div>
+        <div class="lbl" style="margin-top:8px">Trend Ngày 🛡️</div>
+        <div id="regime-1d-badge" style="margin-top:4px;font-weight:900;padding:4px 12px;border-radius:6px;background:#2a2e39;color:#848E9C;font-size:13px"
+             title="Bộ lọc xu hướng khung 1d (EMA21 vs EMA50) — công cụ QUẢN TRỊ RỦI RO. UPTREND = ưu tiên giữ/long; CASH = xu hướng ngày gãy, ưu tiên đứng ngoài để né downtrend lớn. Xem ~1 lần/ngày, KHÔNG phải tín hiệu vào lệnh intraday.">--</div>
       </div>
     </div>
   </div>
@@ -254,17 +257,17 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
 
   <!-- Prediction -->
   <div class="card">
-    <h3>🔮 Prediction</h3>
+    <h3 title="Dự đoán hướng + mức giá mục tiêu cho N nến tới (kiểm chứng ở Forward Testing).">🔮 Prediction</h3>
     <div class="info-row">
-      <span class="lbl">Direction</span>
+      <span class="lbl">Hướng</span>
       <strong id="pred-dir" style="font-size:13px">UNKNOWN</strong>
     </div>
-    <div class="info-row">
-      <span class="lbl">Target Mid</span>
+    <div class="info-row" title="Mức giá mục tiêu dự kiến theo hướng (≈ giá ± 0.6×ATR).">
+      <span class="lbl">Giá mục tiêu</span>
       <strong id="pred-target" class="purple">N/A</strong>
     </div>
-    <div class="info-row">
-      <span class="lbl">Range</span>
+    <div class="info-row" title="Vùng target dự kiến (target ± nhiễu).">
+      <span class="lbl">Vùng target</span>
       <span id="pred-range" style="font-size:11px">N/A</span>
     </div>
   </div>
@@ -356,10 +359,14 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
 
   <!-- Forward Test Tracker -->
   <div class="card">
-    <h3>🔬 Forward Testing</h3>
+    <h3 title="Kiểm chứng dự đoán hướng: sau N nến, giá đi đúng hướng ≥0.2×ATR = WIN; ngược = LOSS; đi ngang = FLAT (không tính). Chỉ hiển thị phiên hiện tại.">🔬 Forward Testing <span style="font-size:9px;color:#848E9C">(phiên này)</span></h3>
+    <div class="info-row" style="margin-top:0">
+      <span class="lbl">Hit-rate phiên</span>
+      <strong id="fwd-session" class="gray" style="font-size:13px">—</strong>
+    </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Dir</th><th>Range</th><th>Actual</th><th>Result</th></tr></thead>
+        <thead><tr><th>Thời gian</th><th>Hướng</th><th>Target</th><th>Thực tế</th><th>KQ</th></tr></thead>
         <tbody id="tracker-body"></tbody>
       </table>
     </div>
@@ -391,11 +398,11 @@ window.addEventListener('resize', () =>
 const candleSeries = chart.addSeries(CandlestickSeries, { upColor:'#26a69a', downColor:'#ef5350', borderVisible:false });
 const ema9Series   = chart.addSeries(LineSeries, { color:'#2962FF', lineWidth:1.5 });
 const ema21Series  = chart.addSeries(LineSeries, { color:'#FF6D00', lineWidth:1.5 });
-const predSeries   = chart.addSeries(LineSeries, { color:'#B228FF', lineWidth:1.5, lineStyle:2 });
 
 let entryLine=null, tpLine=null, slLine=null, liqLine=null;
 let mEntryLine=null, mTpLine=null, mSlLine=null;
 let srLines=[];   // đường hỗ trợ/kháng cự/pivot
+let predTargetLine=null, predZoneHi=null, predZoneLo=null;  // vùng target dự kiến
 let activeClickMode=null;
 
 const LEVERAGE = 100;   // khớp config.py LEVERAGE (để ước tính margin phía client)
@@ -656,6 +663,22 @@ function renderTick(res) {
   const rBadge = document.getElementById('regime-badge');
   if (rBadge) { rBadge.textContent=regime; rBadge.className=`regime regime-${regime}`; }
 
+  // Trend Ngày (1d) — đèn nền quản trị rủi ro
+  const r1 = p.regime_1d;
+  const r1Badge = document.getElementById('regime-1d-badge');
+  if (r1 && r1Badge) {
+    const st = r1.state;
+    const map = {
+      UPTREND: ['🟢 UPTREND (ưu tiên giữ)', '#0ECB81', '#0c2a1f'],
+      CASH:    ['⚪ CASH (đứng ngoài / né downtrend)', '#F6465D', '#2e1418'],
+      UNKNOWN: ['-- (chờ dữ liệu 1d)', '#848E9C', '#2a2e39'],
+    };
+    const [txt, fg, bg] = map[st] || map.UNKNOWN;
+    r1Badge.textContent = txt;
+    r1Badge.style.color = fg;
+    r1Badge.style.background = bg;
+  }
+
   // Action badge
   const action = p.action || p.signal || 'HOLD';
   const aBadge = document.getElementById('action-badge');
@@ -743,23 +766,38 @@ function renderTick(res) {
     setHTML('weights-container', wHtml);
   }
 
-  // Prediction
-  if (p.prediction && p.prediction.mid_price) {
+  // Prediction + VÙNG TARGET dự kiến (thay đường chéo cũ)
+  if (p.prediction && p.prediction.direction) {
     const pd=p.prediction;
     const dirEl=document.getElementById('pred-dir');
     if(dirEl){
       dirEl.textContent=pd.direction;
       dirEl.className=(pd.direction.includes('BULL')?'green':'red');
     }
-    setText('pred-target', pd.mid_price.toFixed(4));
-    const rng=pd.range;
-    setText('pred-range', `${rng.min.toFixed(2)} – ${rng.max.toFixed(2)}`);
+    const tgt = pd.target!=null ? pd.target : pd.mid_price;
+    setText('pred-target', tgt!=null ? tgt.toFixed(4) : 'N/A');
+    if (pd.target_zone) {
+      setText('pred-range', `${pd.target_zone.min.toFixed(2)} – ${pd.target_zone.max.toFixed(2)}`);
+    } else if (pd.range) {
+      setText('pred-range', `${pd.range.min.toFixed(2)} – ${pd.range.max.toFixed(2)}`);
+    }
 
-    const tfStr=document.getElementById('tfSel').value;
-    let sec=60;
-    if(tfStr.includes('m')) sec=parseInt(tfStr)*60;
-    if(tfStr.includes('h')) sec=parseInt(tfStr)*3600;
-    predSeries.setData([{time:localTime, value:currentPrice},{time:localTime+(sec*5), value:pd.mid_price}]);
+    // Vẽ vùng target: 1 đường target chính + 2 đường mờ (zone). Là đường ngang
+    // (Lightweight Charts price line) — không phải đường chéo dễ gây hiểu nhầm.
+    const dirUp = pd.direction.includes('BULL');
+    const tgtColor = dirUp ? '#26a69a' : '#ef5350';
+    const nbars = pd.horizon_bars || 5;
+    if (tgt!=null) {
+      if(!predTargetLine) predTargetLine=candleSeries.createPriceLine(
+        {price:tgt,color:tgtColor,lineWidth:2,lineStyle:2,title:`🎯 DĐ ${dirUp?'▲':'▼'} ${nbars} nến`});
+      else predTargetLine.applyOptions({price:tgt,color:tgtColor,title:`🎯 DĐ ${dirUp?'▲':'▼'} ${nbars} nến`});
+    }
+    if (pd.target_zone) {
+      if(!predZoneHi) predZoneHi=candleSeries.createPriceLine({price:pd.target_zone.max,color:'rgba(178,40,255,.35)',lineWidth:1,lineStyle:1,title:''});
+      else predZoneHi.applyOptions({price:pd.target_zone.max});
+      if(!predZoneLo) predZoneLo=candleSeries.createPriceLine({price:pd.target_zone.min,color:'rgba(178,40,255,.35)',lineWidth:1,lineStyle:1,title:''});
+      else predZoneLo.applyOptions({price:pd.target_zone.min});
+    }
   }
 
   // Auto trade
@@ -856,25 +894,40 @@ function renderTick(res) {
     setHTML('manual-hist-body', h);
   }
 
-  // Tracker
-  if (p.tracker?.length>0) {
+  // Forward Testing — hit-rate phiên
+  if (p.session_stats) {
+    const ss=p.session_stats, wr=p.session_winrate??0;
+    const tot=(ss.win||0)+(ss.loss||0);
+    const el=document.getElementById('fwd-session');
+    if(el){
+      el.textContent = tot>0 ? `${ss.win}/${ss.win+ss.loss} (${wr}%) · FLAT ${ss.flat||0}` : `Chưa có dữ liệu`;
+      el.className = tot===0?'gray':(wr>=55?'green':(wr>=45?'orange':'red'));
+    }
+  }
+
+  // Tracker — thời gian CÓ NGÀY (từ epoch ts), cột Target, chỉ phiên hiện tại
+  if (p.tracker) {
     let h='';
     p.tracker.forEach(item=>{
-      let t=item.time||'';
-      if(t.includes('T')){ try{const d=new Date(t);t=d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');}catch{} }
-      const rc=item.final_result==='WIN'?'#00FF00':(item.final_result==='LOSS'?'#FF0000':'#FFA500');
+      let t='---';
+      if(item.ts){
+        const d=new Date((item.ts - tzOff)*1000);   // ts là epoch UTC giây
+        const pad=n=>n.toString().padStart(2,'0');
+        t=`${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+      const fr=item.final_result;
+      const rc=fr==='WIN'?'#00FF00':(fr==='LOSS'?'#FF0000':(fr==='WAITING'?'#FFA500':'#848E9C'));
       const dc=item.direction.includes('BULL')?'#00FF00':'#FF0000';
-      const rng=typeof item.range==='object'
-        ?`${item.range.min.toFixed(1)}-${item.range.max.toFixed(1)}`
-        :(item.range||'---');
+      const tgt=item.target>0?item.target.toFixed(2):'---';
       h+=`<tr>
-        <td>${t}</td>
+        <td style="font-size:10px">${t}</td>
         <td style="color:${dc}">${item.direction.substring(0,4)}</td>
-        <td style="font-size:10px">${rng}</td>
+        <td style="font-size:10px">${tgt}</td>
         <td>${item.actual_price>0?item.actual_price.toFixed(2):'---'}</td>
-        <td style="color:${rc};font-weight:bold">${item.final_result}</td>
+        <td style="color:${rc};font-weight:bold">${fr}</td>
       </tr>`;
     });
+    if(!h) h='<tr><td colspan="5" class="gray">Chưa có dự đoán phiên này</td></tr>';
     setHTML('tracker-body', h);
   }
 
@@ -903,16 +956,17 @@ function connectWS() {
       const res = JSON.parse(event.data);
 
       if (res.type === 'FULL_LOAD') {
-        // Remove existing auto-trade + structure lines on symbol switch
-        [entryLine,tpLine,slLine,liqLine,...srLines].forEach(l=>{ if(l) candleSeries.removePriceLine(l); });
+        // Remove existing auto-trade + structure + target lines on symbol switch
+        [entryLine,tpLine,slLine,liqLine,predTargetLine,predZoneHi,predZoneLo,...srLines]
+          .forEach(l=>{ if(l) candleSeries.removePriceLine(l); });
         entryLine=tpLine=slLine=liqLine=null; srLines=[]; _lastStructSig='';
+        predTargetLine=predZoneHi=predZoneLo=null;
 
         const tz = new Date().getTimezoneOffset()*60;
         const local = res.data.map(d=>({...d, time:d.time-tz}));
         candleSeries.setData(local);
         ema9Series.setData(local.map(d=>({time:d.time, value:d.EMA_9||0})));
         ema21Series.setData(local.map(d=>({time:d.time, value:d.EMA_21||0})));
-        predSeries.setData([]);
         return;
       }
 

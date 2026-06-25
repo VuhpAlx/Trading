@@ -1,0 +1,83 @@
+2026-06-24 16:32:31,644 INFO Tải/đọc data cache... (symbols=['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'PAXGUSDT'], cần cả HTF context)
+2026-06-24 16:32:31,650 INFO [cache] BTCUSDT/1m: 136800 nến
+2026-06-24 16:32:31,652 INFO [cache] BTCUSDT/5m: 27360 nến
+2026-06-24 16:32:31,653 INFO [cache] BTCUSDT/15m: 9120 nến
+2026-06-24 16:32:31,654 INFO [cache] BTCUSDT/30m: 4560 nến
+2026-06-24 16:32:31,654 INFO [cache] BTCUSDT/1h: 2640 nến
+2026-06-24 16:32:31,655 INFO [cache] BTCUSDT/4h: 1320 nến
+2026-06-24 16:32:31,656 INFO [cache] BTCUSDT/1d: 420 nến
+2026-06-24 16:32:31,662 INFO [cache] ETHUSDT/1m: 136800 nến
+2026-06-24 16:32:31,664 INFO [cache] ETHUSDT/5m: 27360 nến
+2026-06-24 16:32:31,665 INFO [cache] ETHUSDT/15m: 9120 nến
+2026-06-24 16:32:31,670 INFO [cache] ETHUSDT/30m: 4560 nến
+2026-06-24 16:32:31,671 INFO [cache] ETHUSDT/1h: 2640 nến
+2026-06-24 16:32:31,672 INFO [cache] ETHUSDT/4h: 1320 nến
+2026-06-24 16:32:31,672 INFO [cache] ETHUSDT/1d: 420 nến
+2026-06-24 16:32:31,675 INFO [cache] BNBUSDT/1m: 136800 nến
+2026-06-24 16:32:31,678 INFO [cache] BNBUSDT/5m: 27360 nến
+2026-06-24 16:32:31,679 INFO [cache] BNBUSDT/15m: 9120 nến
+2026-06-24 16:32:31,680 INFO [cache] BNBUSDT/30m: 4560 nến
+2026-06-24 16:32:31,680 INFO [cache] BNBUSDT/1h: 2640 nến
+2026-06-24 16:32:31,681 INFO [cache] BNBUSDT/4h: 1320 nến
+2026-06-24 16:32:31,681 INFO [cache] BNBUSDT/1d: 420 nến
+2026-06-24 16:32:31,686 INFO [cache] PAXGUSDT/1m: 136800 nến
+2026-06-24 16:32:31,687 INFO [cache] PAXGUSDT/5m: 27360 nến
+2026-06-24 16:32:31,688 INFO [cache] PAXGUSDT/15m: 9120 nến
+2026-06-24 16:32:31,689 INFO [cache] PAXGUSDT/30m: 4560 nến
+2026-06-24 16:32:31,689 INFO [cache] PAXGUSDT/1h: 2640 nến
+2026-06-24 16:32:31,690 INFO [cache] PAXGUSDT/4h: 1320 nến
+2026-06-24 16:32:31,690 INFO [cache] PAXGUSDT/1d: 420 nến
+2026-06-24 16:32:31,755 INFO ▶ Backtest BTCUSDT/5m ...
+2026-06-24 16:35:38,342 INFO   ✓ BTCUSDT/5m xong trong 186.6s (pred WR 49.3%, trades 15, final $58.62)
+2026-06-24 16:35:38,342 INFO ▶ Backtest BTCUSDT/15m ...
+2026-06-24 16:36:43,132 INFO   ✓ BTCUSDT/15m xong trong 64.8s (pred WR 49.3%, trades 3, final $87.2)
+2026-06-24 16:36:43,132 INFO ▶ Backtest BTCUSDT/30m ...
+2026-06-24 16:37:11,614 INFO   ✓ BTCUSDT/30m xong trong 28.5s (pred WR 50.5%, trades 1, final $117.39)
+2026-06-24 16:37:11,614 INFO ▶ Backtest BTCUSDT/1h ...
+2026-06-24 16:37:29,395 INFO   ✓ BTCUSDT/1h xong trong 17.8s (pred WR 50.5%, trades 3, final $64.98)
+2026-06-24 16:37:29,395 INFO ▶ Backtest ETHUSDT/5m ...
+2026-06-24 16:39:59,154 INFO   ✓ ETHUSDT/5m xong trong 149.8s (pred WR 48.4%, trades 36, final $98.65)
+2026-06-24 16:39:59,154 INFO ▶ Backtest ETHUSDT/15m ...
+2026-06-24 16:40:52,554 INFO   ✓ ETHUSDT/15m xong trong 53.4s (pred WR 47.4%, trades 20, final $93.93)
+2026-06-24 16:40:52,554 INFO ▶ Backtest ETHUSDT/30m ...
+2026-06-24 16:41:14,344 INFO   ✓ ETHUSDT/30m xong trong 21.8s (pred WR 49.3%, trades 9, final $103.58)
+2026-06-24 16:41:14,344 INFO ▶ Backtest ETHUSDT/1h ...
+2026-06-24 16:41:23,846 INFO   ✓ ETHUSDT/1h xong trong 9.5s (pred WR 48.6%, trades 4, final $101.77)
+2026-06-24 16:41:23,847 INFO ▶ Backtest BNBUSDT/5m ...
+2026-06-24 16:43:12,276 INFO   ✓ BNBUSDT/5m xong trong 108.4s (pred WR 48.9%, trades 35, final $96.66)
+2026-06-24 16:43:12,276 INFO ▶ Backtest BNBUSDT/15m ...
+2026-06-24 16:43:51,388 INFO   ✓ BNBUSDT/15m xong trong 39.1s (pred WR 49.5%, trades 6, final $99.85)
+2026-06-24 16:43:51,388 INFO ▶ Backtest BNBUSDT/30m ...
+2026-06-24 16:44:08,880 INFO   ✓ BNBUSDT/30m xong trong 17.5s (pred WR 47.0%, trades 4, final $100.71)
+2026-06-24 16:44:08,880 INFO ▶ Backtest BNBUSDT/1h ...
+2026-06-24 16:44:18,629 INFO   ✓ BNBUSDT/1h xong trong 9.7s (pred WR 47.3%, trades 3, final $101.15)
+2026-06-24 16:44:18,629 INFO ▶ Backtest PAXGUSDT/5m ...
+2026-06-24 16:46:25,612 INFO   ✓ PAXGUSDT/5m xong trong 127.0s (pred WR 49.9%, trades 56, final $66.83)
+2026-06-24 16:46:25,612 INFO ▶ Backtest PAXGUSDT/15m ...
+2026-06-24 16:47:11,192 INFO   ✓ PAXGUSDT/15m xong trong 45.6s (pred WR 48.2%, trades 16, final $90.76)
+2026-06-24 16:47:11,193 INFO ▶ Backtest PAXGUSDT/30m ...
+2026-06-24 16:47:35,260 INFO   ✓ PAXGUSDT/30m xong trong 24.1s (pred WR 49.4%, trades 5, final $97.6)
+2026-06-24 16:47:35,260 INFO ▶ Backtest PAXGUSDT/1h ...
+2026-06-24 16:47:50,194 INFO   ✓ PAXGUSDT/1h xong trong 14.9s (pred WR 50.3%, trades 2, final $100.74)
+2026-06-24 16:47:50,197 INFO Kết quả lưu: D:\Tools\Trading2\backtest\results\backtest_fast.json  (tổng 918.4s)
+
+==============================================================================================================
+SYMBOL/TF       Pred WR       (W/L/F)  Trade WR    (W/L/Liq)  Trades    Final$   MaxDD%     BUY/SELL/HOLD
+--------------------------------------------------------------------------------------------------------------
+BTCUSDT/5m       49.3% 11078/11406/2819     13.3%       2/13/0      15     58.62    48.60         8/8/27044
+BTCUSDT/15m      49.3% 3793/3901/1121      0.0%        0/3/0       3     87.20     9.00          2/1/8817
+BTCUSDT/30m      50.5% 1865/1830/560    100.0%        1/0/0       1    117.39     0.00          0/1/4259
+BTCUSDT/1h       50.5%  1005/986/344      0.0%        0/3/0       3     64.98    25.57          0/3/2337
+ETHUSDT/5m       48.4% 11501/12280/3274     16.7%       6/30/0      36     98.65     6.53       18/18/27024
+ETHUSDT/15m      47.4% 3611/4014/1190     20.0%       4/16/0      20     93.93    10.46         13/7/8800
+ETHUSDT/30m      49.3% 1784/1836/635     55.6%        5/4/0       9    103.58     1.14          0/9/4251
+ETHUSDT/1h       48.6%  958/1012/365     50.0%        2/2/0       4    101.77     0.49          0/4/2336
+BNBUSDT/5m       48.9% 11729/12251/3075     14.3%       5/30/0      35     96.66     3.29       19/16/27025
+BNBUSDT/15m      49.5% 3788/3864/1163     16.7%        1/5/0       6     99.85     0.47          3/3/8814
+BNBUSDT/30m      47.0% 1751/1971/533     50.0%        2/2/0       4    100.71     0.43          0/4/4256
+BNBUSDT/1h       47.3%  960/1069/306     66.7%        2/1/0       3    101.15     0.00          0/3/2337
+PAXGUSDT/5m      49.9% 12006/12056/2993      8.9%       5/51/0      56     66.83    34.29       16/40/27004
+PAXGUSDT/15m     48.2% 3747/4023/1045      6.2%       1/15/0      16     90.76     8.77         5/11/8804
+PAXGUSDT/30m     49.4% 1822/1868/565     20.0%        1/4/0       5     97.60     2.04          1/4/4255
+PAXGUSDT/1h      50.3%   992/980/363     50.0%        1/1/0       2    100.74     1.22          1/1/2338
+==============================================================================================================

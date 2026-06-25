@@ -65,6 +65,25 @@ connection_manager = ConnectionManager()
 # ==========================================
 # MARKET TICK HANDLER
 # ==========================================
+def compute_regime_1d(symbol: str) -> dict:
+    """
+    Bộ lọc XU HƯỚNG khung NGÀY (1d) — công cụ QUẢN TRỊ RỦI RO (từ nghiên cứu
+    backtest mục 19/23): EMA21 > EMA50 trên 1d → UPTREND (ưu tiên GIỮ/long-bias);
+    ngược lại → CASH (xu hướng ngày gãy → ưu tiên ĐỨNG NGOÀI/né downtrend lớn).
+    Đây KHÔNG phải tín hiệu vào lệnh intraday mà là "đèn nền" định hướng rủi ro,
+    nên xem ~1 lần/ngày. Tính từ cache 1d đã stream sẵn (rẻ, cached theo nến).
+    """
+    df = data_manager.cache.get(symbol, {}).get("1d")
+    if df is None or df.empty:
+        return {"state": "UNKNOWN", "ema21": 0.0, "ema50": 0.0}
+    di = indicator_layer.apply_indicators_cached(df, symbol, "1d")
+    row = di.iloc[-1]
+    e21 = float(row.get("EMA_21") or 0.0)
+    e50 = float(row.get("EMA_50") or 0.0)
+    state = "UPTREND" if e21 > e50 else "CASH"
+    return {"state": state, "ema21": round(e21, 2), "ema50": round(e50, 2)}
+
+
 async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data: dict):
     engine = engines.get(f"{symbol}_{interval}")
     if engine is None:
@@ -97,6 +116,7 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
         analysis["trade_history"]  = engine.trade_sim.history[:10]
         analysis["manual_active"]  = engine.manual_sim.active_trades
         analysis["manual_history"] = engine.manual_sim.history
+        analysis["regime_1d"]      = compute_regime_1d(symbol)
 
         # Trade dict was updated by process_tick above (pnl_pct/profit_usd already fresh)
         t     = engine.trade_sim.trade
@@ -144,6 +164,7 @@ async def on_market_tick(symbol: str, interval: str, is_closed: bool, tick_data:
     analysis = engine.generate_signal(df_ind, mtf_context)
     analysis["manual_active"]  = engine.manual_sim.active_trades
     analysis["manual_history"] = engine.manual_sim.history
+    analysis["regime_1d"]      = compute_regime_1d(symbol)
 
     await connection_manager.broadcast_to_symbol(
         json.dumps({"type": "TICK", "symbol": symbol, "candle": tick_data, "signal": analysis}),

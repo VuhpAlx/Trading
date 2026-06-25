@@ -1,0 +1,47 @@
+2026-06-24 16:32:41,217 INFO Tải/đọc data cache... (symbols=['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'PAXGUSDT'], cần cả HTF context)
+2026-06-24 16:32:41,223 INFO [cache] BTCUSDT/1m: 136800 nến
+2026-06-24 16:32:41,225 INFO [cache] BTCUSDT/5m: 27360 nến
+2026-06-24 16:32:41,228 INFO [cache] BTCUSDT/15m: 9120 nến
+2026-06-24 16:32:41,230 INFO [cache] BTCUSDT/30m: 4560 nến
+2026-06-24 16:32:41,231 INFO [cache] BTCUSDT/1h: 2640 nến
+2026-06-24 16:32:41,232 INFO [cache] BTCUSDT/4h: 1320 nến
+2026-06-24 16:32:41,232 INFO [cache] BTCUSDT/1d: 420 nến
+2026-06-24 16:32:41,239 INFO [cache] ETHUSDT/1m: 136800 nến
+2026-06-24 16:32:41,241 INFO [cache] ETHUSDT/5m: 27360 nến
+2026-06-24 16:32:41,242 INFO [cache] ETHUSDT/15m: 9120 nến
+2026-06-24 16:32:41,252 INFO [cache] ETHUSDT/30m: 4560 nến
+2026-06-24 16:32:41,253 INFO [cache] ETHUSDT/1h: 2640 nến
+2026-06-24 16:32:41,254 INFO [cache] ETHUSDT/4h: 1320 nến
+2026-06-24 16:32:41,255 INFO [cache] ETHUSDT/1d: 420 nến
+2026-06-24 16:32:41,265 INFO [cache] BNBUSDT/1m: 136800 nến
+2026-06-24 16:32:41,267 INFO [cache] BNBUSDT/5m: 27360 nến
+2026-06-24 16:32:41,268 INFO [cache] BNBUSDT/15m: 9120 nến
+2026-06-24 16:32:41,269 INFO [cache] BNBUSDT/30m: 4560 nến
+2026-06-24 16:32:41,270 INFO [cache] BNBUSDT/1h: 2640 nến
+2026-06-24 16:32:41,271 INFO [cache] BNBUSDT/4h: 1320 nến
+2026-06-24 16:32:41,271 INFO [cache] BNBUSDT/1d: 420 nến
+2026-06-24 16:32:41,277 INFO [cache] PAXGUSDT/1m: 136800 nến
+2026-06-24 16:32:41,280 INFO [cache] PAXGUSDT/5m: 27360 nến
+2026-06-24 16:32:41,281 INFO [cache] PAXGUSDT/15m: 9120 nến
+2026-06-24 16:32:41,282 INFO [cache] PAXGUSDT/30m: 4560 nến
+2026-06-24 16:32:41,283 INFO [cache] PAXGUSDT/1h: 2640 nến
+2026-06-24 16:32:41,283 INFO [cache] PAXGUSDT/4h: 1320 nến
+2026-06-24 16:32:41,284 INFO [cache] PAXGUSDT/1d: 420 nến
+2026-06-24 16:32:41,327 INFO ▶ Backtest BTCUSDT/1m ...
+2026-06-24 16:45:08,500 INFO   ✓ BTCUSDT/1m xong trong 747.2s (pred WR 49.0%, trades 33, final $4.32)
+2026-06-24 16:45:08,501 INFO ▶ Backtest ETHUSDT/1m ...
+2026-06-24 16:54:58,864 INFO   ✓ ETHUSDT/1m xong trong 590.4s (pred WR 48.9%, trades 178, final $56.49)
+2026-06-24 16:54:58,864 INFO ▶ Backtest BNBUSDT/1m ...
+2026-06-24 17:08:03,415 INFO   ✓ BNBUSDT/1m xong trong 784.6s (pred WR 49.7%, trades 188, final $89.61)
+2026-06-24 17:08:03,416 INFO ▶ Backtest PAXGUSDT/1m ...
+2026-06-24 17:20:29,743 INFO   ✓ PAXGUSDT/1m xong trong 746.3s (pred WR 49.5%, trades 216, final $27.06)
+2026-06-24 17:20:29,745 INFO Kết quả lưu: D:\Tools\Trading2\backtest\results\backtest_1m.json  (tổng 2868.4s)
+
+==============================================================================================================
+SYMBOL/TF       Pred WR       (W/L/F)  Trade WR    (W/L/Liq)  Trades    Final$   MaxDD%     BUY/SELL/HOLD
+--------------------------------------------------------------------------------------------------------------
+BTCUSDT/1m       49.0% 60711/63139/12645      9.1%       3/30/0      33      4.32    95.70      10/23/136467
+ETHUSDT/1m       48.9% 60132/62842/13521      6.2%     11/167/0     178     56.49    45.44      81/97/136322
+BNBUSDT/1m       49.7% 61568/62188/12739     11.7%     22/166/0     188     89.61    10.96      98/90/136312
+PAXGUSDT/1m      49.5% 57836/58990/19669      6.9%     15/201/0     216     27.06    75.87     94/122/136284
+==============================================================================================================
