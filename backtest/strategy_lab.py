@@ -56,6 +56,12 @@ STRATS = {
     "pullback_trend": dict(entry="pullback", bias=True,  sl_atr=1.5, tp="fixedR", rr=1.5),
     # mean-reversion CHỈ khi đi ngang (ADX<20), chốt nhanh ở BB giữa → WR cao
     "regime_meanrev": dict(entry="regime_meanrev", bias=False, sl_atr=1.5, tp="bbmid"),
+    # --- CHIẾN LƯỢC KỲ-VỌNG-DƯƠNG (đề xuất chốt để wire live) ---
+    # Cổng REGIME khung NGÀY (1d) làm rào cứng (né downtrend, bằng chứng ema_longonly
+    # +198%/2.3 năm) + entry pullback thuận trend trên trigger + TP 2R (kỳ vọng dương
+    # cần WR thấp hơn). bias_tfs ép chỉ dùng 1d làm cổng, độc lập BIAS_TFS toàn cục.
+    "pullback_regime": dict(entry="pullback", bias=True, bias_tfs=["1d"],
+                            sl_atr=1.5, tp="fixedR", rr=2.0),
 }
 
 
@@ -128,8 +134,10 @@ def run_strategy(symbol, cfg, data, SimCls) -> dict:
     highs = ind["high"].to_numpy()
     lows = ind["low"].to_numpy()
 
+    # bias_tfs cho phép strategy ép cổng theo khung riêng (vd 1d), độc lập BIAS_TFS.
+    bias_list = cfg.get("bias_tfs", BIAS_TFS)
     htf_ind, htf_close = {}, {}
-    for h in BIAS_TFS:
+    for h in set(BIAS_TFS) | set(bias_list):
         hi = bt.compute_indicators_full(data[symbol][h])
         htf_ind[h] = hi
         htf_close[h] = bt._ms(hi["timestamp"]) + bt._TF_MS[h]
@@ -181,7 +189,7 @@ def run_strategy(symbol, cfg, data, SimCls) -> dict:
             # bias từ HTF đã đóng (chống lookahead)
             if cfg["bias"]:
                 per = []
-                for h in BIAS_TFS:
+                for h in bias_list:
                     j = int(np.searchsorted(htf_close[h], close_ms[i], side="right")) - 1
                     if j < 1:
                         continue

@@ -164,6 +164,9 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
   <div class="card" style="border-color:#2962FF">
     <h3 style="color:#2962FF">⚡ Signal Engine</h3>
 
+    <div id="strategy-badge" style="margin-bottom:8px;font-weight:800;padding:4px 10px;border-radius:6px;background:#2a2e39;color:#848E9C;font-size:12px;display:inline-block"
+         title="Chiến lược ra tín hiệu cho symbol này. 'Breakout Swing (vàng)' = phá kênh Donchian-20 thuận trend khung lớn, TP 3R — đã kiểm chứng có lãi trên VÀNG ở phí thấp (Exness). 'Confluence MTF' = logic đa chỉ báo + cấu trúc cho các symbol còn lại.">Chiến lược: --</div>
+
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div id="action-badge" class="action-badge action-HOLD">HOLD</div>
       <div style="text-align:right">
@@ -215,6 +218,12 @@ td{padding:5px 4px;border-bottom:1px solid #2B3139}
       <div class="lbl" style="margin-bottom:4px">Lý do (confluence)</div>
       <div id="reasons-list" style="font-size:11px;line-height:1.6;color:#B0C4DE">Đang phân tích…</div>
     </div>
+  </div>
+
+  <!-- Breakout Plans (VÀNG) — 2 kế hoạch: bot 3R + trailing tham khảo -->
+  <div class="card" id="breakout-card" style="border-color:#FFD700;display:none">
+    <h3 style="color:#FFD700" title="Chiến lược vàng có 2 kế hoạch thoát lệnh. BOT tự động đánh theo 3R (chốt cứng, rủi ro/lãi xác định). Trailing chỉ để THAM KHẢO — bạn tự quyết trên tài khoản thật nếu muốn ôm trend lâu hơn.">🥇 Kế Hoạch Breakout (Vàng)</h3>
+    <div id="breakout-body" style="font-size:11px;line-height:1.7;color:#B0C4DE">Chưa có tín hiệu breakout.</div>
   </div>
 
   <!-- Individual Signals -->
@@ -692,7 +701,35 @@ function renderTick(res) {
     setStyle('score-bar','background', p.score>0.1?'#00FF00':(p.score<-0.1?'#FF0000':'#FFA500'));
   }
   if (p.confidence!==undefined) setText('confidence', (p.confidence*100).toFixed(1)+'%');
+  if (p.strategy) {
+    const sb = document.getElementById('strategy-badge');
+    if (sb) {
+      const gold = p.strategy.includes('vàng') || p.strategy.toLowerCase().includes('breakout');
+      sb.textContent = 'Chiến lược: ' + p.strategy;
+      sb.style.background = gold ? '#3a2f00' : '#2a2e39';
+      sb.style.color = gold ? '#FFD700' : '#848E9C';
+    }
+  }
   if (p.reason) setText('reason', p.reason);
+  // Breakout (vàng): 2 kế hoạch + trailing sống khi đang có lệnh
+  (function(){
+    const card = document.getElementById('breakout-card');
+    const body = document.getElementById('breakout-body');
+    if (!card || !body) return;
+    const bp = p.breakout_plans, tl = p.breakout_trail_live;
+    if (!bp && !tl) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    let html = '';
+    if (bp) {
+      html += `<div style="margin-bottom:6px"><strong style="color:${bp.side==='BUY'?'#26a69a':'#ef5350'}">${bp.side}</strong> @ ${bp.entry} <span style="color:#848E9C">(ATR ${bp.atr})</span></div>`;
+      html += `<div style="padding:6px;background:#1a2e1a;border-radius:4px;margin-bottom:4px"><div style="color:#FFD700">${bp.bot_3R.label}</div><div>SL <b>${bp.bot_3R.sl}</b> · TP <b>${bp.bot_3R.tp}</b> · R:R ${bp.bot_3R.rr}</div></div>`;
+      html += `<div style="padding:6px;background:#2a2a1a;border-radius:4px"><div style="color:#B0C4DE">${bp.trail.label}</div><div>SL khởi đầu ${bp.trail.sl_init} · trailing ${bp.trail.trail_atr}×ATR</div></div>`;
+    }
+    if (tl) {
+      html += `<div style="margin-top:6px;padding:6px;background:#23252b;border-radius:4px"><div style="color:#FFD700">📈 Lệnh đang mở — trailing tham khảo</div><div>Đỉnh thuận lợi ${tl.peak} · trailing stop <b>${tl.trail_stop}</b> (${tl.trail_atr}×ATR)</div><div style="color:#848E9C">Bot chốt TP ${tl.bot_tp}. ${tl.note}</div></div>`;
+    }
+    body.innerHTML = html;
+  })();
   if (p.winrate!==undefined) {
     const wr = p.ema_winrate ?? p.winrate;
     setText('winrate', wr+'%');

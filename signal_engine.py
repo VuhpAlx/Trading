@@ -15,6 +15,9 @@ from config import (
     HTF_MAP, MIN_RR_AFTER_FEES, MIN_CONFLUENCE,
     STRUCTURE_LOOKBACK, SWING_STRENGTH, LEVERAGE,
     FORWARD_TEST_BARS, FORWARD_FLAT_ATR_MULT, FORWARD_TARGET_ATR_MULT,
+    BREAKOUT_SYMBOLS, BREAKOUT_DONCHIAN_N, BREAKOUT_SL_ATR, BREAKOUT_RR,
+    BREAKOUT_TRAIL_ATR,
+    TAKER_FEE_BY_SYMBOL, DEFAULT_TAKER_FEE, SLIPPAGE_PER_SIDE,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -294,13 +297,16 @@ class AdaptiveScorer:
 # 2. TRADE SIMULATOR — Auto execution (LOT-BASED, kiểu Exness)
 # ==========================================
 class TradeSimulator:
-    # Market order costs — applied to both entry and exit fills
-    TAKER_FEE = 0.0010   # 0.1% market taker fee per side (Binance/Exness ~VIP0)
-    SLIPPAGE  = 0.0002   # 0.02% market impact per fill
+    # Phí mặc định (class-level, fallback). Phí THẬT đặt theo symbol ở __init__.
+    TAKER_FEE = DEFAULT_TAKER_FEE   # taker mỗi chiều
+    SLIPPAGE  = SLIPPAGE_PER_SIDE   # trượt giá mỗi chiều
 
     def __init__(self, symbol: str, timeframe: str, capital: float = 100.0):
         self.symbol = symbol
         self.timeframe = timeframe
+        # Phí khứ hồi theo SÀN/symbol (Exness) — vàng rẻ, crypto rộng hơn.
+        self.TAKER_FEE = TAKER_FEE_BY_SYMBOL.get(symbol, DEFAULT_TAKER_FEE)
+        self.SLIPPAGE  = SLIPPAGE_PER_SIDE
         self.capital = capital          # số dư (balance)
         self.state = "NONE"
         self.trade: dict = {}
@@ -421,6 +427,7 @@ class TradeSimulator:
             "entry_fee": entry_fee,
             "snapshot": indicators_snap,
             "pnl_pct": 0.0, "profit_usd": 0.0,
+            "peak": round(actual_entry, 4),   # đỉnh/đáy thuận lợi (cho gợi ý trailing)
         }
         self.just_opened = True
         self.notifications.append(
@@ -448,6 +455,12 @@ class TradeSimulator:
         t['profit_usd'] = round(net_live, 2)
         # PnL% so với margin (đòn bẩy) — sát cảm nhận "lời/lỗ trên ký quỹ" của Exness
         t['pnl_pct'] = round((net_live / (t['margin_usd'] + 1e-9)) * 100, 2)
+
+        # Đỉnh/đáy thuận lợi từ lúc vào — dùng cho gợi ý trailing (chỉ hiển thị)
+        if self.state == "LONG":
+            t['peak'] = max(t.get('peak', t['entry']), high)
+        else:
+            t['peak'] = min(t.get('peak', t['entry']), low)
 
         equity = self.capital + net_live
 
@@ -758,38 +771,75 @@ class AdvancedSignalEngine:
             else:
                 allowed = []   # NEUTRAL: mặc định đứng ngoài
             req_conf = MIN_CONFLUENCE
+            # Chiến lược theo symbol: VÀNG (PAXG) dùng BREAKOUT; còn lại CONFLUENCE.
+            is_breakout = self.symbol in BREAKOUT_SYMBOLS
+            strat_name = "Breakout Swing (vàng)" if is_breakout else "Confluence MTF"
 
             # Chọn ứng viên trong hướng được phép
             cand = None
-            if "BUY" in allowed and buy_conf >= req_conf:
-                cand = ("BUY", buy_conf, buy_reasons)
-            elif "SELL" in allowed and sell_conf >= req_conf:
-                cand = ("SELL", sell_conf, sell_reasons)
+            if is_breakout:
+                bo_side, _bo_str, bo_reasons = self._breakout_candidate(df, bias_dir, c_price)
+                if bo_side:
+                    # conf giả định (≥4) để lot động hoạt động; RR gate vẫn áp dụng
+                    cand = (bo_side, 4.0, bo_reasons)
+            else:
+                if "BUY" in allowed and buy_conf >= req_conf:
+                    cand = ("BUY", buy_conf, buy_reasons)
+                elif "SELL" in allowed and sell_conf >= req_conf:
+                    cand = ("SELL", sell_conf, sell_reasons)
 
             if bias_dir == "NEUTRAL":
                 reasons.append("⏸️ Khung lớn trung lập → ưu tiên đứng ngoài")
 
             sl = tp = None
             rr = 0.0
+            breakout_plans = None
             if cand and self.trade_sim.cooldown == 0 and self.trade_sim.state == "NONE":
                 side, conf, side_reasons = cand
                 reasons.extend(side_reasons)
 
-                sl, tp = self._structure_sl_tp(side, c_price, atr, structure)
+                if is_breakout:
+                    sl, tp = self._breakout_sl_tp(side, c_price, atr)
+                else:
+                    sl, tp = self._structure_sl_tp(side, c_price, atr, structure)
                 rr = self._rr_after_fees(side, c_price, sl, tp)
                 reasons.append(f"🎯 TP {tp:.2f} / SL {sl:.2f} → R:R {rr:.2f}")
+
+                # 2 KẾ HOẠCH cho lệnh breakout: bot đánh 3R (chốt cứng), trailing chỉ tham khảo.
+                if is_breakout:
+                    mult_b = 1 if side == "BUY" else -1
+                    trail_init = c_price - mult_b * BREAKOUT_SL_ATR * atr
+                    breakout_plans = {
+                        "side": side, "entry": round(c_price, 4), "atr": round(atr, 4),
+                        "bot_3R": {  # BOT ĐÁNH kế hoạch này
+                            "sl": round(sl, 4), "tp": round(tp, 4), "rr": rr,
+                            "label": "🤖 BOT đánh — chốt cứng 3R (rủi ro/lãi xác định)",
+                        },
+                        "trail": {   # CHỈ THAM KHẢO — không tự đánh
+                            "sl_init": round(trail_init, 4),
+                            "trail_atr": BREAKOUT_TRAIL_ATR,
+                            "label": f"📊 Tham khảo — ôm trend, dời stop khi giá đảo "
+                                     f"{BREAKOUT_TRAIL_ATR:.0f}×ATR (~{BREAKOUT_TRAIL_ATR*atr:.2f}). "
+                                     f"KHÔNG chốt 3R. Bạn tự quyết trên tài khoản thật.",
+                        },
+                    }
+                    reasons.append("📊 Có 2 kế hoạch: BOT chốt 3R | tham khảo trailing ôm trend")
 
                 if rr < MIN_RR_AFTER_FEES:
                     reasons.append(f"❌ R:R {rr:.2f} < {MIN_RR_AFTER_FEES} (sau phí) → BỎ lệnh")
                 else:
-                    # Xác nhận 2 nến liên tiếp cùng hướng (giảm nhiễu)
-                    if side == self.current_dir:
+                    # Breakout = sự kiện 1 nến → vào NGAY. Confluence = chờ xác nhận 2 nến.
+                    if is_breakout:
+                        ready = True
+                    elif side == self.current_dir:
                         self.confirm_counter += 1
+                        ready = self.confirm_counter >= 2
                     else:
                         self.confirm_counter = 1
                         self.current_dir = side
+                        ready = False
 
-                    if self.confirm_counter >= 2:
+                    if ready:
                         opened = self.trade_sim.open_position(
                             c_time_str, side, c_price, sl, tp,
                             confluence=conf, bias_strength=bias_strength,
@@ -797,15 +847,18 @@ class AdvancedSignalEngine:
                         )
                         if opened:
                             action = side
-                            reasons.append(f"✅ VÀO LỆNH {side} (lot động theo tín hiệu)")
+                            reasons.append(f"✅ VÀO LỆNH {side} — {strat_name} (lot động theo tín hiệu)")
                     else:
                         reasons.append(f"⏳ Chờ xác nhận nến 2 ({self.confirm_counter}/2)")
             else:
                 self.current_dir = "HOLD"
                 self.confirm_counter = 0
                 if cand is None and bias_dir != "NEUTRAL":
-                    need = buy_conf if bias_dir == "BULL" else sell_conf
-                    reasons.append(f"👀 Confluence {need}/{req_conf} chưa đủ — chờ điểm vào đẹp")
+                    if is_breakout:
+                        reasons.append("👀 Chưa phá vỡ kênh giá — chờ breakout thuận trend khung lớn")
+                    else:
+                        need = buy_conf if bias_dir == "BULL" else sell_conf
+                        reasons.append(f"👀 Confluence {need}/{req_conf} chưa đủ — chờ điểm vào đẹp")
                 if self.trade_sim.cooldown > 0:
                     reasons.append(f"⏳ Cooldown {self.trade_sim.cooldown} nến")
                 if self.trade_sim.state != "NONE":
@@ -907,6 +960,8 @@ class AdvancedSignalEngine:
                 "session_stats": self.scorer.session_stats,
                 "tracker": combined_tracker,
                 "regime": regime,
+                "strategy": strat_name,
+                "breakout_plans": breakout_plans,
             })
             self.last_candle_time = c_time
 
@@ -943,6 +998,23 @@ class AdvancedSignalEngine:
             "profit_usd":  round(t.get('profit_usd', 0.0), 2),
             "capital":     round(self.trade_sim.capital, 2),
         }
+
+        # Gợi ý TRAILING (chỉ tham khảo) cho lệnh breakout đang mở — bot KHÔNG dùng,
+        # để user tự quyết có ôm trend lâu hơn 3R trên tài khoản thật hay không.
+        res_out["breakout_trail_live"] = None
+        if is_open and self.symbol in BREAKOUT_SYMBOLS:
+            peak = t.get('peak', t.get('entry', 0.0))
+            if self.trade_sim.state == "LONG":
+                trail_stop = peak - BREAKOUT_TRAIL_ATR * atr
+            else:
+                trail_stop = peak + BREAKOUT_TRAIL_ATR * atr
+            res_out["breakout_trail_live"] = {
+                "peak": round(peak, 4),
+                "trail_stop": round(trail_stop, 4),
+                "trail_atr": BREAKOUT_TRAIL_ATR,
+                "bot_tp": round(t.get('tp', 0.0), 4),
+                "note": "Bot chốt ở TP 3R. Nếu muốn ôm trend: dời SL lên mức trailing này.",
+            }
 
         return res_out
 
@@ -1030,12 +1102,41 @@ class AdvancedSignalEngine:
 
         return round(sl, 4), round(tp, 4)
 
+    def _breakout_candidate(self, df: pd.DataFrame, bias_dir: str, price: float):
+        """
+        CHIẾN LƯỢC VÀNG (PROJECT_DEEP_DIVE mục 25): phá kênh Donchian N nến
+        THUẬN chiều bias khung lớn. Dùng N nến TRƯỚC nến hiện tại (chống
+        lookahead). Trả (side, strength, reasons) hoặc (None, 0.0, []).
+        """
+        n = BREAKOUT_DONCHIAN_N
+        if df is None or len(df) < n + 2:
+            return None, 0.0, []
+        prior = df.iloc[-(n + 1):-1]   # n nến đã ĐÓNG trước nến hiện tại
+        donch_high = float(prior['high'].max())
+        donch_low  = float(prior['low'].min())
+        if bias_dir == "BULL" and price > donch_high:
+            return "BUY", 0.7, [
+                f"📈 Phá ĐỈNH kênh {n} nến ({donch_high:.2f}) thuận xu hướng TĂNG khung lớn"]
+        if bias_dir == "BEAR" and price < donch_low:
+            return "SELL", 0.7, [
+                f"📉 Phá ĐÁY kênh {n} nến ({donch_low:.2f}) thuận xu hướng GIẢM khung lớn"]
+        return None, 0.0, []
+
+    def _breakout_sl_tp(self, side: str, price: float, atr: float):
+        """SL = BREAKOUT_SL_ATR × ATR; TP = BREAKOUT_RR × R. Hồ sơ đã kiểm
+        chứng trên vàng (WR ~33% nhưng ăn xa → kỳ vọng dương ở phí thấp)."""
+        mult = 1 if side == "BUY" else -1
+        risk = BREAKOUT_SL_ATR * atr
+        sl = price - mult * risk
+        tp = price + mult * risk * BREAKOUT_RR
+        return round(sl, 4), round(tp, 4)
+
     def _rr_after_fees(self, side: str, price: float, sl: float, tp: float) -> float:
         """
         R:R đã tính chi phí khứ hồi (phí taker 2 chiều + slippage 2 chiều).
         Đây là bộ lọc cốt lõi chống 'phí ăn hết lời'.
         """
-        fee_cost = price * (2 * TradeSimulator.TAKER_FEE + 2 * TradeSimulator.SLIPPAGE)
+        fee_cost = price * (2 * self.trade_sim.TAKER_FEE + 2 * self.trade_sim.SLIPPAGE)
         if side == "BUY":
             reward = (tp - price) - fee_cost
             risk   = (price - sl) + fee_cost

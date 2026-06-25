@@ -33,6 +33,40 @@ MIN_CONFLUENCE    = 3      # Số yếu tố tối thiểu cùng hướng (xem s
 STRUCTURE_LOOKBACK = 200   # Số nến quét để tìm swing high/low (S/R)
 SWING_STRENGTH     = 3      # Fractal: 1 đỉnh/đáy phải cao/thấp hơn N nến 2 bên
 
+# --- Chiến lược BREAKOUT SWING cho VÀNG (PAXG proxy) ------------------
+# Bằng chứng backtest (PROJECT_DEEP_DIVE mục 20 & 25): phá kênh Donchian
+# THUẬN trend khung lớn trên VÀNG (1h, bias 4h/1d) ĐÁNH BẠI buy-and-hold
+# (+97% vs +72%, MaxDD chỉ ~12%) NẾU phí khứ hồi ≤ ~0.03% — mức spread vàng
+# Exness Standard thường đạt. WR thấp (~33%) nhưng ăn xa (TP 3R) → kỳ vọng
+# DƯƠNG. Symbol nằm trong set này dùng entry BREAKOUT thay cho confluence;
+# các symbol khác giữ nguyên logic cũ (bias + confluence + cấu trúc).
+# ⚠️ Khuyến nghị dùng ở khung 1h (đã kiểm chứng). Khung nhỏ hơn = nhiễu/phí.
+BREAKOUT_SYMBOLS    = {"PAXGUSDT"}
+BREAKOUT_DONCHIAN_N = 20     # Số nến tính kênh giá (đỉnh/đáy) để xác định phá vỡ
+BREAKOUT_SL_ATR     = 1.5    # SL cách entry 1.5 × ATR
+BREAKOUT_RR         = 3.0    # TP = 3R (chốt xa, ôm trend — bù cho WR thấp)
+# Trailing cho kế hoạch THAM KHẢO breakout_trail (chỉ HIỂN THỊ, bot KHÔNG đánh).
+# Bot tự động vẫn dùng 3R (rủi ro/lãi xác định). breakout_trail = ôm trend, thoát
+# khi giá đảo BREAKOUT_TRAIL_ATR × ATR từ đỉnh/đáy thuận lợi — để user tự quyết
+# trên tài khoản thật nếu muốn ôm trend lâu hơn (backtest +95.7%, ít nhạy phí).
+BREAKOUT_TRAIL_ATR  = 3.0
+
+# --- PHÍ GIAO DỊCH theo SÀN/symbol (Exness) — ƯỚC LƯỢNG, PHẢI hiệu chỉnh! ----
+# Chi phí khứ hồi mỗi lệnh ≈ 2×TAKER_FEE + 2×SLIPPAGE (xấp xỉ spread). Chiến lược
+# breakout vàng CHỈ có lãi khi phí khứ hồi ≤ ~0.03% (PROJECT_DEEP_DIVE mục 25).
+#   • VÀNG (PAXG/XAUUSD) Exness Standard: spread rẻ → ~0.03% khứ hồi.
+#   • CRYPTO Exness Standard: spread RỘNG hơn → ~0.10–0.12% khứ hồi.
+# ⚠️ Đây là ƯỚC LƯỢNG. Mở MT5/Exness Terminal, xem cột Spread của symbol, lấy
+#    (spread ÷ giá) làm phí khứ hồi THẬT rồi sửa lại các số dưới cho khớp tài khoản.
+TAKER_FEE_BY_SYMBOL = {
+    "PAXGUSDT": 0.00010,   # vàng: ~0.03% khứ hồi (đã gồm slippage) — vùng breakout có lãi
+    "BTCUSDT":  0.00050,   # crypto Standard: ~0.11% khứ hồi
+    "ETHUSDT":  0.00050,
+    "BNBUSDT":  0.00060,
+}
+DEFAULT_TAKER_FEE = 0.00050   # symbol không có trong map
+SLIPPAGE_PER_SIDE = 0.00005   # trượt giá mỗi chiều (thấp hơn Binance giả định cũ)
+
 # --- Forward Testing (kiểm chứng dự đoán hướng) ----------------------
 # Sau mỗi nến đóng, hệ thống ghi 1 dự đoán hướng và kiểm chứng sau N nến:
 #   WIN  = giá đi ĐÚNG hướng ít nhất FLAT_ATR_MULT × ATR

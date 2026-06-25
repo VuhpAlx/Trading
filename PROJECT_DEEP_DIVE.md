@@ -1318,3 +1318,83 @@ Ba giá trị thật của nghiên cứu đã được wire vào hệ thống li
 
 **(3) Backtest harness** — `backtest/README.md` hướng dẫn đầy đủ (chạy, thêm chiến lược,
 đọc kết quả, chống overfit). Để user tự kiểm mọi ý tưởng tương lai một cách trung thực.
+
+### 25. THỬ NGHIỆM `pullback_regime` (cổng 1d cứng) — NO-GO [MỚI]
+
+Bối cảnh: user lại hỏi liệu có cách nào đạt WR cao / app khả thi hơn cho Exness. Chốt
+hướng (phiên này): mục tiêu = **kỳ vọng dương** (không chạy theo WR), backtest-validate
+trước khi wire. Giả thuyết kết hợp: cổng REGIME khung NGÀY (1d) cứng (lấy edge né-downtrend
+của `ema_longonly`) + entry `pullback` thuận trend trên 1h + **TP 2R**.
+
+**Triển khai (CHỈ trong `backtest/`):**
+- `strategy_lab.py`: thêm strat `pullback_regime` (`bias_tfs=["1d"]`, rr=2.0) + hỗ trợ
+  `cfg["bias_tfs"]` để 1 strategy ép khung cổng riêng (độc lập `BIAS_TFS` toàn cục).
+- `walkforward.py`: thêm vào `TEST`; thêm **kỳ vọng/lệnh theo R** (`avg_r_multiple`),
+  bảng WR/avgR/MaxDD, và **tiêu chí GO/NO-GO**; lưu `results/walkforward_pullback_regime.json`.
+
+**Kết quả walk-forward (2 năm 1h, 4 coin, phí 0.06%):**
+
+| Strategy | Trades | WR% | avg R | MaxDD% | Ret%TB | +đoạn |
+|---|---|---|---|---|---|---|
+| **pullback_regime** | 71 | 35.2 | **−0.014** | 7.3 | −0.5 | 2/6 |
+| pullback_trend | 98 | 46.9 | +0.099 | 5.7 | +2.0 | 3/6 |
+| breakout_3R | 1133 | 29.1 | +0.068 | 23.8 | +16.9 | 4/6 |
+
+Độ nhạy phí pullback_regime: +0.1% (0.03%) → −0.5% (0.06%) → −1.3% (0.10%).
+
+**GO/NO-GO = ❌ NO-GO** (đạt 2/5): ✓MaxDD<25, ✓không coin nào <−20%; ✗avgR≥0.3, ✗WR≥40,
+✗≥4/6 đoạn dương.
+
+**Kết luận:** cổng 1d CỨNG **làm xấu hơn** `pullback_trend` (cắt 98→71 lệnh mà không lọc
+được lệnh tốt hơn) → khẳng định lại: giá trị của regime 1d là **quản trị rủi ro** (DD chỉ
+7.3%), KHÔNG phải nguồn alpha. Nhất quán toàn bộ nghiên cứu (mục 18–24). **KHÔNG wire vào
+live.** `pullback_trend` vẫn là hồ sơ tốt nhất cho intraday-swing (≈hòa vốn, DD thấp), nhưng
+không đạt "kỳ vọng dương rõ rệt". Hướng còn lại đúng đắn nhất: dùng **regime badge 1d**
+(đã có ở live, mục 24) như tín hiệu PHÂN BỔ swing, không kỳ vọng bot intraday sinh lời.
+
+### 26. WIRE LIVE: BREAKOUT SWING cho VÀNG + PHÍ THEO SYMBOL (v7) [MỚI]
+
+Bối cảnh: user trade Exness Standard, muốn xem khả năng sinh lời nếu BÁM tín hiệu app (để
+so với bot web), chọn dùng PAXG làm proxy vàng, và yêu cầu app tự đề xuất SL/TP hợp lý.
+Bằng chứng (mục 20 & breakout riêng PAXG): breakout Donchian thuận trend trên VÀNG **+97.6%
+vs B&H +72.2% (MaxDD ~12%)** ở phí 0.02%, ≈hòa ở 0.04%, thua ở 0.06% → CHỈ sống ở phí thấp.
+
+**(1) Chiến lược BREAKOUT theo symbol — `config.py` + `signal_engine.py`:**
+- `config.BREAKOUT_SYMBOLS={"PAXGUSDT"}`, `BREAKOUT_DONCHIAN_N=20`, `BREAKOUT_SL_ATR=1.5`,
+  `BREAKOUT_RR=3.0`.
+- `signal_engine`: 2 helper `_breakout_candidate(df, bias_dir, price)` (phá kênh Donchian N
+  nến ĐÃ ĐÓNG thuận bias, chống lookahead) + `_breakout_sl_tp(side, price, atr)` (SL 1.5×ATR,
+  TP 3R). Trong `generate_signal`, nhánh `is_breakout = symbol in BREAKOUT_SYMBOLS`: dùng
+  entry breakout thay cho confluence, SL/TP breakout thay cho cấu trúc, **vào NGAY trên nến
+  phá vỡ** (không chờ xác nhận 2 nến — phá vỡ là sự kiện 1 nến). Vẫn qua cổng `MIN_RR_AFTER_FEES`
+  + sizing rủi ro + `open_position` cũ. Các symbol khác giữ nguyên logic confluence.
+- `ui_state["strategy"]` = "Breakout Swing (vàng)" | "Confluence MTF" → frontend hiển thị.
+
+**(2) PHÍ THEO SYMBOL (Exness) — `config.py` + `TradeSimulator`:**
+- Lỗi nền tảng phát hiện khi test: `TradeSimulator` đang dùng phí Binance 0.24% khứ hồi →
+  breakout vàng KHÔNG BAO GIỜ qua được cổng R:R (RR sụt còn 0.65). User trade Exness.
+- `config.TAKER_FEE_BY_SYMBOL` (PAXG 0.0001 → ~0.03% khứ hồi; crypto 0.0005 → ~0.11%) +
+  `DEFAULT_TAKER_FEE`, `SLIPPAGE_PER_SIDE=0.00005`. `TradeSimulator.__init__` set
+  `self.TAKER_FEE/SLIPPAGE` theo symbol; `_rr_after_fees` đọc `self.trade_sim.TAKER_FEE`
+  (trước đây đọc class-level). ⚠️ Đây là ƯỚC LƯỢNG — user PHẢI hiệu chỉnh theo spread thật.
+- Sau fix: smoke test (PAXG, bias BULL ép, nến phá đỉnh) → BUY mở, R:R 2.40 (sau phí vàng),
+  SL/TP đề xuất; trường hợp không phá vỡ → HOLD đúng.
+
+**Định vị:** đây là chiến lược TREND-FOLLOWER thật (WR ~33%, ăn xa) — lãi **lumpy** theo
+sóng, DD ~12–18%, **rất nhạy phí**. Chỉ có ý nghĩa khi phí khứ hồi thật của user ≤ ~0.03%
+(vàng Exness Standard thường đạt). KHÔNG phải đảm bảo lãi — là công cụ để user quan sát &
+so với bot web. Paper-trade: theo dõi winrate/PnL/lịch sử trong terminal như các symbol khác.
+
+**(3) HAI KẾ HOẠCH thoát lệnh (v7.1) — bot 3R + trailing tham khảo:**
+Theo yêu cầu user ("kết hợp với buy-and-hold"): so sánh trên PAXG cho thấy `breakout_trail`
+(ôm trend, trailing 3×ATR thay vì chốt 3R) = **+95.7% vs B&H +72%, KHÔNG nhạy phí** (ít
+vào/ra hơn → hợp tài khoản Standard) nhưng DD cao hơn (16% vs 12%) vì trả lại lãi mở khi
+giá đảo. User chọn: **BOT vẫn đánh 3R** (rủi ro/lãi xác định, không muốn trả lại lãi khi
+trend đảo), **trailing chỉ HIỂN THỊ tham khảo** để tự quyết trên tài khoản thật.
+- `config.BREAKOUT_TRAIL_ATR=3.0`. `signal_engine`: khi breakout kích hoạt → `ui_state
+  ["breakout_plans"]` = {side, entry, atr, bot_3R:{sl,tp,rr}, trail:{sl_init,trail_atr}}.
+  Khi lệnh breakout đang mở → `res_out["breakout_trail_live"]` = {peak, trail_stop, bot_tp}
+  với `peak` (đỉnh/đáy thuận lợi) cập nhật mỗi tick trong `process_tick` (`trade['peak']`).
+- Frontend: card `#breakout-card` (🥇 Kế Hoạch Breakout) hiện 2 kế hoạch + trailing sống.
+- ⚠️ Lưu ý số liệu backtest: lãi đã trừ phí+slippage nhưng **CHƯA trừ swap** (phí qua đêm).
+  Trailing ôm lệnh lâu → swap ảnh hưởng nhiều hơn. MaxDD = sụt giảm đỉnh-đáy lớn nhất (%).
